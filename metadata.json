@@ -1,0 +1,6 @@
+{
+  "name": "SingSync AI - 实时跟唱",
+  "description": "AI实时跟唱与声音克隆软件：智能音频人声伴奏分离、干声样本音色提取、实时张嘴麦克风拾音与原曲音高音准跟唱引擎。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
