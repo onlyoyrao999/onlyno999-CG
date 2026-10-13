@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FileUpload
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -357,7 +357,7 @@ fun VoiceCloneScreen(
                             .background(if (profile.isUserCustom) NeonPurple else Color(0xFF24304E))
                     ) {
                         Icon(
-                            imageVector = if (profile.isUserCustom) Icons.Default.RecordVoiceOver else Icons.Default.VolumeUp,
+                            imageVector = if (profile.isUserCustom) Icons.Default.RecordVoiceOver else Icons.AutoMirrored.Filled.VolumeUp,
                             contentDescription = null,
                             tint = if (isSelected) NeonCyan else Color.White,
                             modifier = Modifier.size(20.dp)
