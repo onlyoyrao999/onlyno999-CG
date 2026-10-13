@@ -22,14 +22,10 @@ class ExampleUnitTest {
     }
 
     @Test
-    fun sampleSongs_areConfiguredProperly() {
+    fun sampleSongs_builtInFakeSongsRemoved() {
         val songs = SampleSongs.songs
-        assertTrue("Should have at least 3 demo songs", songs.size >= 3)
-
-        val firstSong = songs.first()
-        assertTrue(firstSong.lyrics.isNotEmpty())
-        assertTrue(firstSong.pitchNotes.isNotEmpty())
-        assertTrue(firstSong.durationMs > 0)
+        // Built-in fake songs removed as requested, ready for user MP3
+        assertTrue(songs.isEmpty())
     }
 
     @Test

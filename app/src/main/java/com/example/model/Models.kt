@@ -32,15 +32,17 @@ data class Song(
     val title: String,
     val artist: String,
     val durationMs: Long,
-    val bpm: Int,
-    val musicalKey: String,
-    val genre: String,
+    val bpm: Int = 100,
+    val musicalKey: String = "C Major",
+    val genre: String = "本地音乐",
     val primaryColor: Long = 0xFF7952EC,
     val secondaryColor: Long = 0xFF00F5D4,
-    val lyrics: List<LyricLine>,
-    val pitchNotes: List<PitchNote>,
-    val isCustomImported: Boolean = false,
-    val separationStatus: SeparationStatus = SeparationStatus.READY
+    val lyrics: List<LyricLine> = emptyList(),
+    val pitchNotes: List<PitchNote> = emptyList(),
+    val isCustomImported: Boolean = true,
+    val separationStatus: SeparationStatus = SeparationStatus.READY,
+    val audioFilePath: String? = null,
+    val audioUriString: String? = null
 )
 
 enum class SeparationStatus {

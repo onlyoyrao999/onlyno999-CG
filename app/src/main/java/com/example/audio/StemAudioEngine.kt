@@ -4,18 +4,23 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.MediaPlayer
+import android.media.audiofx.Equalizer
 import com.example.model.PitchNote
 import com.example.model.ReverbType
+import com.example.model.SingingMode
 import com.example.model.Song
 import com.example.model.VoiceProfile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -28,8 +33,14 @@ class StemAudioEngine {
         AudioFormat.ENCODING_PCM_16BIT
     ) * 2
 
+    // Real MP3 Player
+    private var mediaPlayer: MediaPlayer? = null
+    private var equalizer: Equalizer? = null
+
+    // Real-time AI Voice Synthesizer
     private var audioTrack: AudioTrack? = null
     private var playbackJob: Job? = null
+    private var positionSyncJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default)
 
     private val _playbackPositionMs = MutableStateFlow(0L)
@@ -40,10 +51,21 @@ class StemAudioEngine {
 
     // Stem Mixer settings
     var bgmVolume: Float = 0.85f
+        set(value) {
+            field = value
+            mediaPlayer?.setVolume(value, value)
+        }
     var aiVoiceVolume: Float = 0.95f
     var guideVocalVolume: Float = 0.0f
     var reverbType: ReverbType = ReverbType.KARAOKE
-    var singingMode: com.example.model.SingingMode = com.example.model.SingingMode.REALTIME_MIC_TRIGGER
+    var singingMode: SingingMode = SingingMode.REALTIME_MIC_TRIGGER
+
+    // Stem solo mode: "BOTH", "BGM", "VOCAL"
+    var stemSoloMode: String = "BOTH"
+        set(value) {
+            field = value
+            applyStemFilter()
+        }
 
     // Current state references
     private var currentSong: Song? = null
@@ -69,12 +91,96 @@ class StemAudioEngine {
         pause()
         currentSong = song
         _playbackPositionMs.value = 0L
+
+        // Initialize real MP3 playback if an audio file path exists
+        releaseMediaPlayer()
+        val filePath = song.audioFilePath
+        if (filePath != null && File(filePath).exists()) {
+            try {
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(filePath)
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    prepare()
+                    setVolume(bgmVolume, bgmVolume)
+                    setOnCompletionListener {
+                        _isPlaying.value = false
+                        _playbackPositionMs.value = 0L
+                    }
+                }
+                initEqualizer()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    private fun initEqualizer() {
+        try {
+            val mp = mediaPlayer ?: return
+            equalizer = Equalizer(0, mp.audioSessionId).apply {
+                enabled = true
+            }
+            applyStemFilter()
+        } catch (_: Exception) {}
+    }
+
+    private fun applyStemFilter() {
+        val eq = equalizer ?: return
+        try {
+            val numBands = eq.numberOfBands
+            val minBandLevel = eq.bandLevelRange[0]
+            val maxBandLevel = eq.bandLevelRange[1]
+
+            when (stemSoloMode) {
+                "BGM" -> {
+                    // Attenuate mid vocal frequencies (~1kHz to 3kHz) to eliminate singer's dry vocal
+                    for (i in 0 until numBands) {
+                        val centerFreq = eq.getCenterFreq(i.toShort()) // in mHz
+                        if (centerFreq in 800000..3500000) {
+                            eq.setBandLevel(i.toShort(), (minBandLevel * 0.8f).toInt().toShort())
+                        } else {
+                            eq.setBandLevel(i.toShort(), 0)
+                        }
+                    }
+                }
+                "VOCAL" -> {
+                    // Attenuate bass drums & high frequencies, isolate mid vocal
+                    for (i in 0 until numBands) {
+                        val centerFreq = eq.getCenterFreq(i.toShort())
+                        if (centerFreq in 800000..3500000) {
+                            eq.setBandLevel(i.toShort(), (maxBandLevel * 0.6f).toInt().toShort())
+                        } else {
+                            eq.setBandLevel(i.toShort(), (minBandLevel * 0.7f).toInt().toShort())
+                        }
+                    }
+                }
+                else -> {
+                    // Normal flat response
+                    for (i in 0 until numBands) {
+                        eq.setBandLevel(i.toShort(), 0)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     fun play() {
         if (_isPlaying.value || currentSong == null) return
 
         try {
+            // 1. Play real MP3 if available
+            val mp = mediaPlayer
+            if (mp != null) {
+                mp.start()
+                startPositionSync()
+            }
+
+            // 2. Start AI vocal follow-along synthesizer
             audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
@@ -102,10 +208,30 @@ class StemAudioEngine {
         }
     }
 
+    private fun startPositionSync() {
+        positionSyncJob?.cancel()
+        positionSyncJob = scope.launch {
+            while (isActive && _isPlaying.value) {
+                val mp = mediaPlayer
+                if (mp != null && mp.isPlaying) {
+                    _playbackPositionMs.value = mp.currentPosition.toLong()
+                }
+                delay(30)
+            }
+        }
+    }
+
     fun pause() {
         _isPlaying.value = false
+        positionSyncJob?.cancel()
+        positionSyncJob = null
         playbackJob?.cancel()
         playbackJob = null
+
+        try {
+            mediaPlayer?.pause()
+        } catch (_: Exception) {}
+
         try {
             audioTrack?.stop()
             audioTrack?.release()
@@ -117,25 +243,26 @@ class StemAudioEngine {
         val song = currentSong ?: return
         val clamped = positionMs.coerceIn(0L, song.durationMs)
         _playbackPositionMs.value = clamped
+        try {
+            mediaPlayer?.seekTo(clamped.toInt())
+        } catch (_: Exception) {}
     }
 
     private fun startAudioSynthesisLoop() {
         playbackJob = scope.launch {
             val song = currentSong ?: return@launch
-            val chunkSamples = 1024 // Stereo samples per write
+            val chunkSamples = 1024
             val pcmBuffer = ShortArray(chunkSamples * 2)
 
             var phaseVocal = 0.0
             var phaseHarmonic = 0.0
-            var phaseBass = 0.0
-            var phaseChord = 0.0
             var vocalEnvelope = 0.0f
 
             val msPerChunk = (chunkSamples * 1000L) / sampleRate
 
             while (isActive && _isPlaying.value) {
                 val currentMs = _playbackPositionMs.value
-                if (currentMs >= song.durationMs) {
+                if (currentMs >= song.durationMs && mediaPlayer == null) {
                     _playbackPositionMs.value = 0L
                     break
                 }
@@ -143,8 +270,8 @@ class StemAudioEngine {
                 // Locate active melody note for current time
                 val currentTargetNote = song.pitchNotes.find { currentMs in it.startMs..it.endMs }
 
-                // Vocal trigger smoothing: either continuous full song replacement or real-time mic trigger
-                val shouldSing = if (singingMode == com.example.model.SingingMode.FULL_VOICE_REPLACEMENT) {
+                // Determine whether AI cloned vocal should sound
+                val shouldSing = if (singingMode == SingingMode.FULL_VOICE_REPLACEMENT) {
                     currentTargetNote != null
                 } else {
                     isMouthOpenSinging && currentTargetNote != null
@@ -155,46 +282,16 @@ class StemAudioEngine {
                 // Musical pitch calculation
                 var targetFreq = currentTargetNote?.frequencyHz ?: 0f
                 if (targetFreq > 0 && userSingingPitchHz > 50f && activeProfile.autoTuneStrength < 1.0f) {
-                    // Blend user pitch inflection with auto-tune
                     val autoSnap = activeProfile.autoTuneStrength
                     targetFreq = targetFreq * autoSnap + userSingingPitchHz * (1f - autoSnap)
                 }
 
-                // Synthesis loop per audio sample
+                // AI Voice synthesis loop
                 for (i in 0 until chunkSamples) {
                     val sampleTime = currentMs / 1000.0 + (i.toDouble() / sampleRate)
-
-                    // 1. Synthesize Accompaniment (BPM rhythm & chord progression)
-                    val beatFreq = song.bpm / 60.0
-                    val beatPhase = (sampleTime * beatFreq) % 1.0
-                    // Kick drum pulse
-                    val kick = if (beatPhase < 0.15) {
-                        sin(2 * PI * (120.0 * (1.0 - beatPhase / 0.15))) * (1.0 - beatPhase / 0.15)
-                    } else 0.0
-
-                    // Bassline note
-                    val chordIdx = ((sampleTime * beatFreq) / 4).toInt() % 4
-                    val bassMidi = when (chordIdx) {
-                        0 -> 36 // C2
-                        1 -> 41 // F2
-                        2 -> 43 // G2
-                        else -> 40 // E2
-                    }
-                    val bassFreq = 440.0 * Math.pow(2.0, (bassMidi - 69) / 12.0)
-                    phaseBass += (2 * PI * bassFreq) / sampleRate
-                    val bass = (sin(phaseBass) + 0.3 * sin(phaseBass * 2)) * 0.45
-
-                    // Soft chord pad
-                    val chordFreq = bassFreq * 4.0
-                    phaseChord += (2 * PI * chordFreq) / sampleRate
-                    val pad = sin(phaseChord) * 0.2
-
-                    val bgmSample = (kick * 0.5 + bass + pad) * bgmVolume
-
-                    // 2. Synthesize AI Cloned Vocal (Shaped by user timbre profile)
                     var vocalSample = 0.0
+
                     if (targetFreq > 0 && vocalEnvelope > 0.01f) {
-                        // Formant & Timbre harmonics
                         val fShift = activeProfile.formantShift.toDouble()
                         val vibrato = 1.0 + (0.015 * activeProfile.vibratoDepth * sin(2 * PI * 5.5 * sampleTime))
                         val vocalPitch = targetFreq * vibrato
@@ -202,7 +299,6 @@ class StemAudioEngine {
                         phaseVocal += (2 * PI * vocalPitch) / sampleRate
                         phaseHarmonic += (2 * PI * vocalPitch * (2.0 * fShift)) / sampleRate
 
-                        // Rich glottal pulse + formant resonance
                         val fundamental = sin(phaseVocal)
                         val secondHarmonic = sin(phaseHarmonic) * activeProfile.resonance.toDouble()
                         val breathNoise = (Math.random() - 0.5) * activeProfile.breathiness.toDouble()
@@ -211,11 +307,10 @@ class StemAudioEngine {
                         vocalSample = rawVocal * vocalEnvelope * aiVoiceVolume
                     }
 
-                    // 3. Mix stems
-                    var mixL = bgmSample + vocalSample
-                    var mixR = bgmSample + vocalSample
+                    // Studio Reverb DSP
+                    var mixL = vocalSample
+                    var mixR = vocalSample
 
-                    // 4. Studio Reverb DSP
                     if (reverbType != ReverbType.OFF) {
                         val decay = reverbType.decay
                         val wet = reverbType.wetMix
@@ -232,23 +327,34 @@ class StemAudioEngine {
                         reverbIndex = (reverbIndex + 1) % reverbBufferL.size
                     }
 
-                    // Clamp to 16-bit PCM
-                    val sampleShortL = (mixL.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
-                    val sampleShortR = (mixR.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
-
-                    pcmBuffer[i * 2] = sampleShortL
-                    pcmBuffer[i * 2 + 1] = sampleShortR
+                    pcmBuffer[i * 2] = (mixL.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
+                    pcmBuffer[i * 2 + 1] = (mixR.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
                 }
 
                 audioTrack?.write(pcmBuffer, 0, pcmBuffer.size)
-                _playbackPositionMs.value = (currentMs + msPerChunk).coerceAtMost(song.durationMs)
+
+                // If no real MP3 MediaPlayer is playing, advance timeline manually
+                if (mediaPlayer == null) {
+                    _playbackPositionMs.value = (currentMs + msPerChunk).coerceAtMost(song.durationMs)
+                }
             }
 
             _isPlaying.value = false
         }
     }
 
+    private fun releaseMediaPlayer() {
+        try {
+            equalizer?.release()
+            equalizer = null
+            mediaPlayer?.stop()
+            mediaPlayer?.release()
+            mediaPlayer = null
+        } catch (_: Exception) {}
+    }
+
     fun release() {
         pause()
+        releaseMediaPlayer()
     }
 }

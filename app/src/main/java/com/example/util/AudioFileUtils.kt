@@ -56,4 +56,21 @@ object AudioFileUtils {
             "本地MP3"
         }
     }
+
+    fun copyUriToLocalFile(context: Context, uri: Uri): java.io.File? {
+        return try {
+            val fileName = getFileName(context, uri)
+            val songsDir = java.io.File(context.filesDir, "songs").apply { mkdirs() }
+            val targetFile = java.io.File(songsDir, "${System.currentTimeMillis()}_$fileName")
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                targetFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            targetFile
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
 }

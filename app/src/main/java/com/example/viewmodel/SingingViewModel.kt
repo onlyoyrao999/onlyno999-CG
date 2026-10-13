@@ -66,8 +66,8 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     private val _songs = MutableStateFlow<List<Song>>(SampleSongs.songs)
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
 
-    private val _selectedSong = MutableStateFlow<Song>(SampleSongs.songs.first())
-    val selectedSong: StateFlow<Song> = _selectedSong.asStateFlow()
+    private val _selectedSong = MutableStateFlow<Song?>(SampleSongs.songs.firstOrNull())
+    val selectedSong: StateFlow<Song?> = _selectedSong.asStateFlow()
 
     // Recorded sessions
     private val _recordedSessions = MutableStateFlow<List<SingingSessionRecord>>(emptyList())
@@ -80,6 +80,10 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     fun setSingingMode(mode: com.example.model.SingingMode) {
         _singingMode.value = mode
         audioEngine.singingMode = mode
+    }
+
+    fun setStemSoloMode(mode: String) {
+        audioEngine.stemSoloMode = mode
     }
 
     // Recording session state
@@ -103,7 +107,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     private val evaluatedNotes = mutableSetOf<Long>()
 
     init {
-        audioEngine.loadSong(_selectedSong.value)
+        _selectedSong.value?.let { audioEngine.loadSong(it) }
         audioEngine.setVoiceProfile(activeProfile.value)
 
         // Observe mic changes and forward to audio synthesis engine in real-time
@@ -233,10 +237,25 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun importAndSeparateLocalAudio(context: android.content.Context, uri: android.net.Uri) {
-        val fileName = com.example.util.AudioFileUtils.getFileName(context, uri)
-        val artist = com.example.util.AudioFileUtils.getAudioArtist(context, uri)
-        val durationMs = com.example.util.AudioFileUtils.getAudioDurationMs(context, uri)
-        separateSong(fileName, artist, durationMs)
+        viewModelScope.launch {
+            val fileName = com.example.util.AudioFileUtils.getFileName(context, uri)
+            val artist = com.example.util.AudioFileUtils.getAudioArtist(context, uri)
+            val durationMs = com.example.util.AudioFileUtils.getAudioDurationMs(context, uri)
+            // Copy file to local app storage for permanent playback
+            val localFile = com.example.util.AudioFileUtils.copyUriToLocalFile(context, uri)
+            val filePath = localFile?.absolutePath
+
+            val newSong = stemSeparator.separateSong(
+                songTitle = fileName,
+                artistName = artist,
+                durationMs = durationMs,
+                audioFilePath = filePath,
+                audioUriString = uri.toString()
+            )
+            val updated = listOf(newSong) + _songs.value.filter { it.id != newSong.id }
+            _songs.value = updated
+            selectSong(newSong)
+        }
     }
 
     // Session recording
@@ -256,7 +275,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun saveCurrentSession() {
-        val song = _selectedSong.value
+        val song = _selectedSong.value ?: return
         val score = _scoreState.value
         val grade = when {
             score.currentScore >= 2000 -> "SSS"
@@ -287,7 +306,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     private fun evaluateSingingScore(posMs: Long, mic: MicStatus) {
         if (!isPlaying.value) return
 
-        val song = _selectedSong.value
+        val song = _selectedSong.value ?: return
         val activeNote = song.pitchNotes.find { posMs in it.startMs..it.endMs } ?: return
 
         // Evaluate around middle of note

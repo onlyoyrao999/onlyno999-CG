@@ -438,8 +438,7 @@ fun StemSeparationScreen(
                     OutlinedButton(
                         onClick = {
                             soloStem = if (soloStem == "BGM") "BOTH" else "BGM"
-                            viewModel.setBgmVolume(1.0f)
-                            viewModel.setAiVoiceVolume(if (soloStem == "BGM") 0.0f else 0.9f)
+                            viewModel.setStemSoloMode(soloStem ?: "BOTH")
                         },
                         shape = RoundedCornerShape(8.dp)
                     ) {
@@ -523,8 +522,7 @@ fun StemSeparationScreen(
                     OutlinedButton(
                         onClick = {
                             soloStem = if (soloStem == "VOCAL") "BOTH" else "VOCAL"
-                            viewModel.setBgmVolume(if (soloStem == "VOCAL") 0.0f else 0.85f)
-                            viewModel.setAiVoiceVolume(1.0f)
+                            viewModel.setStemSoloMode(soloStem ?: "BOTH")
                         },
                         shape = RoundedCornerShape(8.dp)
                     ) {

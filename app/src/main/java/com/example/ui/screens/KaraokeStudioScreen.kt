@@ -114,15 +114,94 @@ fun KaraokeStudioScreen(
         viewModel.startMic(hasRecordAudioPermission)
     }
 
+    // Empty state if no song is imported yet
+    if (selectedSong == null) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(StudioBackground)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(80.dp)
+                        .clip(CircleShape)
+                        .background(NeonPurple.copy(alpha = 0.2f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AudioFile,
+                        contentDescription = null,
+                        tint = NeonCyan,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                Text(
+                    text = "暂未导入本地 MP3 歌曲",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "点击下方按钮选择你的手机本地 MP3，系统将自动分离背景伴奏与人声干声，开始实时跟唱！",
+                    fontSize = 13.sp,
+                    color = TextMuted,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 20.sp
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                androidx.compose.material3.Button(
+                    onClick = { studioAudioPickerLauncher.launch("audio/*") },
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = NeonCyan),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(50.dp)
+                        .testTag("empty_state_upload_mp3_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AudioFile,
+                        contentDescription = null,
+                        tint = Color.Black,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "上传我的本地 MP3 歌曲",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.Black
+                    )
+                }
+            }
+        }
+        return
+    }
+
+    val activeSong = selectedSong!!
+
     // Auto-scroll lyrics to current line
     val lyricsListState = rememberLazyListState()
-    val currentLineIndex = remember(playbackPosMs, selectedSong) {
-        selectedSong.lyrics.indexOfFirst { playbackPosMs in it.startMs..it.endMs }
+    val currentLineIndex = remember(playbackPosMs, activeSong) {
+        activeSong.lyrics.indexOfFirst { playbackPosMs in it.startMs..it.endMs }
             .takeIf { it >= 0 } ?: 0
     }
 
     LaunchedEffect(currentLineIndex) {
-        if (currentLineIndex >= 0 && selectedSong.lyrics.isNotEmpty()) {
+        if (currentLineIndex >= 0 && activeSong.lyrics.isNotEmpty()) {
             lyricsListState.animateScrollToItem(currentLineIndex.coerceAtLeast(0))
         }
     }
@@ -146,7 +225,7 @@ fun KaraokeStudioScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = selectedSong.title,
+                        text = activeSong.title,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary,
@@ -162,7 +241,7 @@ fun KaraokeStudioScreen(
                     )
                 }
                 Text(
-                    text = "${selectedSong.artist} · ${selectedSong.genre}",
+                    text = "${activeSong.artist} · ${activeSong.genre}",
                     fontSize = 11.sp,
                     color = TextMuted
                 )
@@ -289,7 +368,7 @@ fun KaraokeStudioScreen(
 
         // 3. Dynamic Pitch Visualizer (Melody note waterfall & user pitch tracker)
         PitchVisualizer(
-            notes = selectedSong.pitchNotes,
+            notes = activeSong.pitchNotes,
             currentPosMs = playbackPosMs,
             userMidiNote = micStatus.detectedMidi,
             isMouthOpen = micStatus.isMouthOpen,
@@ -313,7 +392,7 @@ fun KaraokeStudioScreen(
                     .padding(vertical = 8.dp, horizontal = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                items(selectedSong.lyrics) { line ->
+                items(activeSong.lyrics) { line ->
                     val isCurrent = playbackPosMs in line.startMs..line.endMs
                     Text(
                         text = line.text,
@@ -583,7 +662,7 @@ fun KaraokeStudioScreen(
                     }
 
                     items(songs) { song ->
-                        val isSel = song.id == selectedSong.id
+                        val isSel = song.id == selectedSong?.id
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

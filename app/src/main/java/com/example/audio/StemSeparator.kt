@@ -32,7 +32,9 @@ class StemSeparator {
     suspend fun separateSong(
         songTitle: String,
         artistName: String = "本地导入",
-        durationMs: Long = 40000L
+        durationMs: Long = 40000L,
+        audioFilePath: String? = null,
+        audioUriString: String? = null
     ): Song {
         _processState.value = SeparationProcessState(
             isProcessing = true,
@@ -109,7 +111,9 @@ class StemSeparator {
             lyrics = generatedLyrics,
             pitchNotes = generatedNotes,
             isCustomImported = true,
-            separationStatus = SeparationStatus.READY
+            separationStatus = SeparationStatus.READY,
+            audioFilePath = audioFilePath,
+            audioUriString = audioUriString
         )
 
         _processState.value = SeparationProcessState(
