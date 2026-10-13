@@ -116,13 +116,25 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         _selectedSong.value?.let { audioEngine.loadSong(it) }
         audioEngine.setVoiceProfile(activeProfile.value)
 
-        // Observe mic changes and forward to audio engine in real-time
+        // 1. Observe voice profile changes ONLY when profile actually updates
         viewModelScope.launch {
-            combine(micStatus, activeProfile, playbackPositionMs) { mic, profile, pos ->
-                Triple(mic, profile, pos)
-            }.collect { (mic, profile, pos) ->
-                audioEngine.updateSingingTrigger(mic.isMouthOpen, mic.pitchHz)
+            activeProfile.collect { profile ->
                 audioEngine.setVoiceProfile(profile)
+            }
+        }
+
+        // 2. Observe mic changes for voice trigger
+        viewModelScope.launch {
+            micStatus.collect { mic ->
+                audioEngine.updateSingingTrigger(mic.isMouthOpen, mic.pitchHz)
+            }
+        }
+
+        // 3. Evaluate real-time scoring on playback progress
+        viewModelScope.launch {
+            combine(playbackPositionMs, micStatus) { pos, mic ->
+                Pair(pos, mic)
+            }.collect { (pos, mic) ->
                 evaluateSingingScore(pos, mic)
             }
         }

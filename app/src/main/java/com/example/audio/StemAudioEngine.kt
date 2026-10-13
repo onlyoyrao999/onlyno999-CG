@@ -54,7 +54,7 @@ class StemAudioEngine(private val context: Context) {
             applyVolumes()
         }
 
-    var aiVoiceVolume: Float = 0.95f
+    var aiVoiceVolume: Float = 1.0f
         set(value) {
             field = value
             applyVolumes()
@@ -67,7 +67,15 @@ class StemAudioEngine(private val context: Context) {
         }
 
     var reverbType: ReverbType = ReverbType.KARAOKE
+
     var singingMode: SingingMode = SingingMode.FULL_VOICE_REPLACEMENT
+        set(value) {
+            field = value
+            applyVolumes()
+            if (_isPlaying.value) {
+                ensureUserVocalPlaying()
+            }
+        }
 
     // Stem solo mode: "BOTH", "BGM", "VOCAL"
     var stemSoloMode: String = "BOTH"
@@ -86,22 +94,41 @@ class StemAudioEngine(private val context: Context) {
         this.isMouthOpenSinging = isMouthOpen
         this.userSingingPitchHz = livePitchHz
 
-        // In Real-time Mic Trigger mode, modulate dry vocal volume based on mouth opening
-        if (singingMode == SingingMode.REALTIME_MIC_TRIGGER && _isPlaying.value) {
-            val uvp = userVocalPlayer ?: return
-            try {
+        if (!_isPlaying.value) return
+
+        val uvp = userVocalPlayer ?: return
+        try {
+            if (singingMode == SingingMode.REALTIME_MIC_TRIGGER) {
                 if (isMouthOpen) {
                     uvp.setVolume(aiVoiceVolume, aiVoiceVolume)
+                    if (!uvp.isPlaying) {
+                        uvp.start()
+                    }
                 } else {
-                    uvp.setVolume(0.05f * aiVoiceVolume, 0.05f * aiVoiceVolume)
+                    // Duck volume smoothly when mouth is not open
+                    uvp.setVolume(0.15f * aiVoiceVolume, 0.15f * aiVoiceVolume)
                 }
-            } catch (_: Exception) {}
-        }
+            } else {
+                // In Full Voice Replacement mode, always full volume
+                uvp.setVolume(aiVoiceVolume, aiVoiceVolume)
+                if (!uvp.isPlaying) {
+                    uvp.start()
+                }
+            }
+        } catch (_: Exception) {}
     }
 
+    /**
+     * Updates active voice profile. Only re-initializes userVocalPlayer if the file path or ID actually changed!
+     */
     fun setVoiceProfile(profile: VoiceProfile) {
+        val pathChanged = this.activeProfile.dryAudioFilePath != profile.dryAudioFilePath
+        val idChanged = this.activeProfile.id != profile.id
         this.activeProfile = profile
-        setupUserVocalPlayer()
+
+        if (pathChanged || idChanged || userVocalPlayer == null) {
+            setupUserVocalPlayer()
+        }
     }
 
     /**
@@ -171,7 +198,7 @@ class StemAudioEngine(private val context: Context) {
             } catch (_: Exception) {}
         }
 
-        // 3. User dry vocal player
+        // 3. Setup User dry vocal player
         setupUserVocalPlayer()
         applyVolumes()
     }
@@ -183,6 +210,7 @@ class StemAudioEngine(private val context: Context) {
         val dryPath = activeProfile.dryAudioFilePath
         if (dryPath != null && File(dryPath).exists()) {
             try {
+                userVocalPlayer?.stop()
                 userVocalPlayer?.release()
                 val file = File(dryPath)
                 val fis = FileInputStream(file)
@@ -197,6 +225,9 @@ class StemAudioEngine(private val context: Context) {
                     fis.close()
                     isLooping = true // Loop dry vocal sample to continuously accompany the melody
                     prepare()
+                    if (_isPlaying.value) {
+                        ensureUserVocalPlaying()
+                    }
                 }
                 applyVolumes()
             } catch (e: Exception) {
@@ -204,9 +235,22 @@ class StemAudioEngine(private val context: Context) {
                 userVocalPlayer = null
             }
         } else {
+            userVocalPlayer?.stop()
             userVocalPlayer?.release()
             userVocalPlayer = null
         }
+    }
+
+    private fun ensureUserVocalPlaying() {
+        val uvp = userVocalPlayer ?: return
+        val bp = bgmPlayer
+        try {
+            val currentPos = bp?.currentPosition ?: 0
+            val dryDuration = uvp.duration.coerceAtLeast(1)
+            uvp.seekTo(currentPos % dryDuration)
+            uvp.start()
+            applyVolumes()
+        } catch (_: Exception) {}
     }
 
     private fun applyVolumes() {
@@ -217,7 +261,11 @@ class StemAudioEngine(private val context: Context) {
 
         val effectiveAiVoiceVol = when (stemSoloMode) {
             "BGM" -> 0f
-            else -> aiVoiceVolume
+            else -> if (singingMode == SingingMode.REALTIME_MIC_TRIGGER && !isMouthOpenSinging) {
+                0.15f * aiVoiceVolume
+            } else {
+                aiVoiceVolume
+            }
         }
 
         val effectiveGuideVol = when (stemSoloMode) {
@@ -258,8 +306,8 @@ class StemAudioEngine(private val context: Context) {
                 gvp.start()
             }
 
-            applyVolumes()
             _isPlaying.value = true
+            applyVolumes()
         } catch (e: Exception) {
             e.printStackTrace()
             _errorMessage.value = "播放出错: ${e.message}"

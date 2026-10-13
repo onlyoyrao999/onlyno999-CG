@@ -305,29 +305,54 @@ fun KaraokeStudioScreen(
         }
 
         if (activeProfile.dryAudioFilePath != null) {
+            val isAuditionPlaying by viewModel.isAuditionPlaying.collectAsState()
             Spacer(modifier = Modifier.height(6.dp))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .background(NeonGreen.copy(alpha = 0.15f))
-                    .clickable { viewModel.navigateTo(AppScreen.VOICE_CLONE) }
                     .padding(horizontal = 12.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = NeonGreen,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "主唱声线已绑定：${activeProfile.name} (已用于替代原唱)",
-                    fontSize = 11.sp,
-                    color = NeonGreen,
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.navigateTo(AppScreen.VOICE_CLONE) },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = NeonGreen,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "主唱声线：${activeProfile.name} (已替代原唱)",
+                        fontSize = 11.sp,
+                        color = NeonGreen,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isAuditionPlaying) NeonMagenta else NeonGreen)
+                        .clickable { viewModel.toggleAudition(activeProfile.dryAudioFilePath) }
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = if (isAuditionPlaying) "⏸ 暂停" else "▶ 单独试听",
+                        color = Color.Black,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
