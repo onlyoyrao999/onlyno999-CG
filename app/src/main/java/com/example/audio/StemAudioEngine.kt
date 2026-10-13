@@ -1,11 +1,8 @@
 package com.example.audio
 
+import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioTrack
 import android.media.MediaPlayer
-import android.media.audiofx.Equalizer
 import com.example.model.PitchNote
 import com.example.model.ReverbType
 import com.example.model.SingingMode
@@ -21,27 +18,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
-import kotlin.math.PI
-import kotlin.math.sin
+import java.io.FileInputStream
 
-class StemAudioEngine {
+class StemAudioEngine(private val context: Context) {
 
-    private val sampleRate = 44100
-    private val bufferSize = AudioTrack.getMinBufferSize(
-        sampleRate,
-        AudioFormat.CHANNEL_OUT_STEREO,
-        AudioFormat.ENCODING_PCM_16BIT
-    ) * 2
+    private val scope = CoroutineScope(Dispatchers.Main)
 
-    // Real MP3 Player
-    private var mediaPlayer: MediaPlayer? = null
-    private var equalizer: Equalizer? = null
+    // Primary BGM Accompaniment Player
+    private var bgmPlayer: MediaPlayer? = null
 
-    // Real-time AI Voice Synthesizer
-    private var audioTrack: AudioTrack? = null
-    private var playbackJob: Job? = null
+    // User Dry Vocal Player (Plays uploaded dry MP3 or recorded dry vocal)
+    private var userVocalPlayer: MediaPlayer? = null
+
+    // Vocal Guide / Extracted Vocal Player (if listening to original vocal stem)
+    private var guideVocalPlayer: MediaPlayer? = null
+
     private var positionSyncJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Default)
 
     private val _playbackPositionMs = MutableStateFlow(0L)
     val playbackPositionMs: StateFlow<Long> = _playbackPositionMs.asStateFlow()
@@ -49,123 +41,194 @@ class StemAudioEngine {
     private val _isPlaying = MutableStateFlow(false)
     val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
 
+    private val _isMp3Ready = MutableStateFlow(false)
+    val isMp3Ready: StateFlow<Boolean> = _isMp3Ready.asStateFlow()
+
+    private val _errorMessage = MutableStateFlow<String?>(null)
+    val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
+
     // Stem Mixer settings
-    var bgmVolume: Float = 0.85f
+    var bgmVolume: Float = 0.90f
         set(value) {
             field = value
-            mediaPlayer?.setVolume(value, value)
+            applyVolumes()
         }
+
     var aiVoiceVolume: Float = 0.95f
+        set(value) {
+            field = value
+            applyVolumes()
+        }
+
     var guideVocalVolume: Float = 0.0f
+        set(value) {
+            field = value
+            applyVolumes()
+        }
+
     var reverbType: ReverbType = ReverbType.KARAOKE
-    var singingMode: SingingMode = SingingMode.REALTIME_MIC_TRIGGER
+    var singingMode: SingingMode = SingingMode.FULL_VOICE_REPLACEMENT
 
     // Stem solo mode: "BOTH", "BGM", "VOCAL"
     var stemSoloMode: String = "BOTH"
         set(value) {
             field = value
-            applyStemFilter()
+            applyVolumes()
         }
 
     // Current state references
     private var currentSong: Song? = null
-    private var activeProfile: VoiceProfile = VoiceProfile(id = "default", name = "默认音色", subtitle = "系统预设音色")
+    private var activeProfile: VoiceProfile = VoiceProfile(id = "default", name = "默认音色", subtitle = "系统预设")
     private var isMouthOpenSinging: Boolean = false
     private var userSingingPitchHz: Float = 0f
-
-    // Reverb comb filter buffers
-    private val reverbBufferL = FloatArray(sampleRate / 4)
-    private val reverbBufferR = FloatArray(sampleRate / 4)
-    private var reverbIndex = 0
 
     fun updateSingingTrigger(isMouthOpen: Boolean, livePitchHz: Float) {
         this.isMouthOpenSinging = isMouthOpen
         this.userSingingPitchHz = livePitchHz
+
+        // In Real-time Mic Trigger mode, modulate dry vocal volume based on mouth opening
+        if (singingMode == SingingMode.REALTIME_MIC_TRIGGER && _isPlaying.value) {
+            val uvp = userVocalPlayer ?: return
+            try {
+                if (isMouthOpen) {
+                    uvp.setVolume(aiVoiceVolume, aiVoiceVolume)
+                } else {
+                    uvp.setVolume(0.05f * aiVoiceVolume, 0.05f * aiVoiceVolume)
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     fun setVoiceProfile(profile: VoiceProfile) {
         this.activeProfile = profile
+        setupUserVocalPlayer()
     }
 
+    /**
+     * Loads the song. Automatically selects the cleanest audio:
+     * Prefers clean separated BGM file (with lead vocals eliminated via phase cancellation),
+     * or falls back to original audioFilePath.
+     */
     fun loadSong(song: Song) {
         pause()
         currentSong = song
         _playbackPositionMs.value = 0L
+        _isMp3Ready.value = false
+        _errorMessage.value = null
 
-        // Initialize real MP3 playback if an audio file path exists
-        releaseMediaPlayer()
-        val filePath = song.audioFilePath
-        if (filePath != null && File(filePath).exists()) {
+        releasePlayers()
+
+        // 1. Determine Accompaniment (BGM) file
+        val targetBgmPath = when {
+            song.bgmFilePath != null && File(song.bgmFilePath).exists() -> song.bgmFilePath
+            song.audioFilePath != null && File(song.audioFilePath).exists() -> song.audioFilePath
+            else -> null
+        }
+
+        if (targetBgmPath != null) {
             try {
-                mediaPlayer = MediaPlayer().apply {
-                    setDataSource(filePath)
+                val file = File(targetBgmPath)
+                val fis = FileInputStream(file)
+                bgmPlayer = MediaPlayer().apply {
                     setAudioAttributes(
                         AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
                             .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                             .build()
                     )
+                    setDataSource(fis.fd)
+                    fis.close()
                     prepare()
-                    setVolume(bgmVolume, bgmVolume)
                     setOnCompletionListener {
                         _isPlaying.value = false
                         _playbackPositionMs.value = 0L
                     }
                 }
-                initEqualizer()
+                _isMp3Ready.value = true
             } catch (e: Exception) {
                 e.printStackTrace()
+                _errorMessage.value = "伴奏加载失败: ${e.message}"
             }
+        }
+
+        // 2. Guide vocal stem player (if isolated original vocal exists)
+        val targetVocalPath = song.vocalFilePath
+        if (targetVocalPath != null && File(targetVocalPath).exists()) {
+            try {
+                val file = File(targetVocalPath)
+                val fis = FileInputStream(file)
+                guideVocalPlayer = MediaPlayer().apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    setDataSource(fis.fd)
+                    fis.close()
+                    prepare()
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 3. User dry vocal player
+        setupUserVocalPlayer()
+        applyVolumes()
+    }
+
+    /**
+     * Prepares user's uploaded or recorded dry vocal track to sing alongside BGM.
+     */
+    private fun setupUserVocalPlayer() {
+        val dryPath = activeProfile.dryAudioFilePath
+        if (dryPath != null && File(dryPath).exists()) {
+            try {
+                userVocalPlayer?.release()
+                val file = File(dryPath)
+                val fis = FileInputStream(file)
+                userVocalPlayer = MediaPlayer().apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    setDataSource(fis.fd)
+                    fis.close()
+                    isLooping = true // Loop dry vocal sample to continuously accompany the melody
+                    prepare()
+                }
+                applyVolumes()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                userVocalPlayer = null
+            }
+        } else {
+            userVocalPlayer?.release()
+            userVocalPlayer = null
         }
     }
 
-    private fun initEqualizer() {
-        try {
-            val mp = mediaPlayer ?: return
-            equalizer = Equalizer(0, mp.audioSessionId).apply {
-                enabled = true
-            }
-            applyStemFilter()
-        } catch (_: Exception) {}
-    }
+    private fun applyVolumes() {
+        val effectiveBgmVol = when (stemSoloMode) {
+            "VOCAL" -> 0f
+            else -> bgmVolume
+        }
 
-    private fun applyStemFilter() {
-        val eq = equalizer ?: return
-        try {
-            val numBands = eq.numberOfBands
-            val minBandLevel = eq.bandLevelRange[0]
-            val maxBandLevel = eq.bandLevelRange[1]
+        val effectiveAiVoiceVol = when (stemSoloMode) {
+            "BGM" -> 0f
+            else -> aiVoiceVolume
+        }
 
-            when (stemSoloMode) {
-                "BGM" -> {
-                    // Attenuate mid vocal frequencies (~1kHz to 3kHz) to eliminate singer's dry vocal
-                    for (i in 0 until numBands) {
-                        val centerFreq = eq.getCenterFreq(i.toShort()) // in mHz
-                        if (centerFreq in 800000..3500000) {
-                            eq.setBandLevel(i.toShort(), (minBandLevel * 0.8f).toInt().toShort())
-                        } else {
-                            eq.setBandLevel(i.toShort(), 0)
-                        }
-                    }
-                }
-                "VOCAL" -> {
-                    // Attenuate bass drums & high frequencies, isolate mid vocal
-                    for (i in 0 until numBands) {
-                        val centerFreq = eq.getCenterFreq(i.toShort())
-                        if (centerFreq in 800000..3500000) {
-                            eq.setBandLevel(i.toShort(), (maxBandLevel * 0.6f).toInt().toShort())
-                        } else {
-                            eq.setBandLevel(i.toShort(), (minBandLevel * 0.7f).toInt().toShort())
-                        }
-                    }
-                }
-                else -> {
-                    // Normal flat response
-                    for (i in 0 until numBands) {
-                        eq.setBandLevel(i.toShort(), 0)
-                    }
-                }
-            }
+        val effectiveGuideVol = when (stemSoloMode) {
+            "BGM" -> 0f
+            else -> guideVocalVolume
+        }
+
+        try {
+            bgmPlayer?.setVolume(effectiveBgmVol, effectiveBgmVol)
+            userVocalPlayer?.setVolume(effectiveAiVoiceVol, effectiveAiVoiceVol)
+            guideVocalPlayer?.setVolume(effectiveGuideVol, effectiveGuideVol)
         } catch (_: Exception) {}
     }
 
@@ -173,51 +236,33 @@ class StemAudioEngine {
         if (_isPlaying.value || currentSong == null) return
 
         try {
-            // 1. Play real MP3 if available
-            val mp = mediaPlayer
-            if (mp != null) {
-                mp.start()
+            val bp = bgmPlayer
+            if (bp != null) {
+                bp.start()
                 startPositionSync()
             }
 
-            // 2. Start AI vocal follow-along synthesizer
-            audioTrack = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                        .build()
-                )
-                .setBufferSizeInBytes(bufferSize)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            // Sync and start user dry vocal player
+            val uvp = userVocalPlayer
+            if (uvp != null) {
+                val currentPos = bp?.currentPosition ?: 0
+                val dryDuration = uvp.duration.coerceAtLeast(1)
+                uvp.seekTo(currentPos % dryDuration)
+                uvp.start()
+            }
 
-            audioTrack?.play()
+            // Start guide vocal if active
+            val gvp = guideVocalPlayer
+            if (gvp != null && guideVocalVolume > 0.05f) {
+                gvp.seekTo(bp?.currentPosition ?: 0)
+                gvp.start()
+            }
+
+            applyVolumes()
             _isPlaying.value = true
-
-            startAudioSynthesisLoop()
         } catch (e: Exception) {
             e.printStackTrace()
-        }
-    }
-
-    private fun startPositionSync() {
-        positionSyncJob?.cancel()
-        positionSyncJob = scope.launch {
-            while (isActive && _isPlaying.value) {
-                val mp = mediaPlayer
-                if (mp != null && mp.isPlaying) {
-                    _playbackPositionMs.value = mp.currentPosition.toLong()
-                }
-                delay(30)
-            }
+            _errorMessage.value = "播放出错: ${e.message}"
         }
     }
 
@@ -225,18 +270,18 @@ class StemAudioEngine {
         _isPlaying.value = false
         positionSyncJob?.cancel()
         positionSyncJob = null
-        playbackJob?.cancel()
-        playbackJob = null
 
         try {
-            mediaPlayer?.pause()
+            bgmPlayer?.pause()
         } catch (_: Exception) {}
 
         try {
-            audioTrack?.stop()
-            audioTrack?.release()
+            userVocalPlayer?.pause()
         } catch (_: Exception) {}
-        audioTrack = null
+
+        try {
+            guideVocalPlayer?.pause()
+        } catch (_: Exception) {}
     }
 
     fun seekTo(positionMs: Long) {
@@ -244,117 +289,53 @@ class StemAudioEngine {
         val clamped = positionMs.coerceIn(0L, song.durationMs)
         _playbackPositionMs.value = clamped
         try {
-            mediaPlayer?.seekTo(clamped.toInt())
+            bgmPlayer?.seekTo(clamped.toInt())
+            val uvp = userVocalPlayer
+            if (uvp != null) {
+                val dur = uvp.duration.coerceAtLeast(1)
+                uvp.seekTo((clamped % dur).toInt())
+            }
+            guideVocalPlayer?.seekTo(clamped.toInt())
         } catch (_: Exception) {}
     }
 
-    private fun startAudioSynthesisLoop() {
-        playbackJob = scope.launch {
-            val song = currentSong ?: return@launch
-            val chunkSamples = 1024
-            val pcmBuffer = ShortArray(chunkSamples * 2)
-
-            var phaseVocal = 0.0
-            var phaseHarmonic = 0.0
-            var vocalEnvelope = 0.0f
-
-            val msPerChunk = (chunkSamples * 1000L) / sampleRate
-
+    private fun startPositionSync() {
+        positionSyncJob?.cancel()
+        positionSyncJob = scope.launch {
             while (isActive && _isPlaying.value) {
-                val currentMs = _playbackPositionMs.value
-                if (currentMs >= song.durationMs && mediaPlayer == null) {
-                    _playbackPositionMs.value = 0L
-                    break
+                val bp = bgmPlayer
+                if (bp != null && bp.isPlaying) {
+                    _playbackPositionMs.value = bp.currentPosition.toLong()
                 }
-
-                // Locate active melody note for current time
-                val currentTargetNote = song.pitchNotes.find { currentMs in it.startMs..it.endMs }
-
-                // Determine whether AI cloned vocal should sound
-                val shouldSing = if (singingMode == SingingMode.FULL_VOICE_REPLACEMENT) {
-                    currentTargetNote != null
-                } else {
-                    isMouthOpenSinging && currentTargetNote != null
-                }
-                val targetEnvelope = if (shouldSing) 1.0f else 0.0f
-                vocalEnvelope += (targetEnvelope - vocalEnvelope) * 0.15f
-
-                // Musical pitch calculation
-                var targetFreq = currentTargetNote?.frequencyHz ?: 0f
-                if (targetFreq > 0 && userSingingPitchHz > 50f && activeProfile.autoTuneStrength < 1.0f) {
-                    val autoSnap = activeProfile.autoTuneStrength
-                    targetFreq = targetFreq * autoSnap + userSingingPitchHz * (1f - autoSnap)
-                }
-
-                // AI Voice synthesis loop
-                for (i in 0 until chunkSamples) {
-                    val sampleTime = currentMs / 1000.0 + (i.toDouble() / sampleRate)
-                    var vocalSample = 0.0
-
-                    if (targetFreq > 0 && vocalEnvelope > 0.01f) {
-                        val fShift = activeProfile.formantShift.toDouble()
-                        val vibrato = 1.0 + (0.015 * activeProfile.vibratoDepth * sin(2 * PI * 5.5 * sampleTime))
-                        val vocalPitch = targetFreq * vibrato
-
-                        phaseVocal += (2 * PI * vocalPitch) / sampleRate
-                        phaseHarmonic += (2 * PI * vocalPitch * (2.0 * fShift)) / sampleRate
-
-                        val fundamental = sin(phaseVocal)
-                        val secondHarmonic = sin(phaseHarmonic) * activeProfile.resonance.toDouble()
-                        val breathNoise = (Math.random() - 0.5) * activeProfile.breathiness.toDouble()
-
-                        val rawVocal = (fundamental * 0.7 + secondHarmonic * 0.4 + breathNoise * 0.2)
-                        vocalSample = rawVocal * vocalEnvelope * aiVoiceVolume
-                    }
-
-                    // Studio Reverb DSP
-                    var mixL = vocalSample
-                    var mixR = vocalSample
-
-                    if (reverbType != ReverbType.OFF) {
-                        val decay = reverbType.decay
-                        val wet = reverbType.wetMix
-
-                        val revL = reverbBufferL[reverbIndex]
-                        val revR = reverbBufferR[reverbIndex]
-
-                        reverbBufferL[reverbIndex] = ((vocalSample + revL * decay)).toFloat()
-                        reverbBufferR[reverbIndex] = ((vocalSample + revR * decay)).toFloat()
-
-                        mixL += revL * wet
-                        mixR += revR * wet
-
-                        reverbIndex = (reverbIndex + 1) % reverbBufferL.size
-                    }
-
-                    pcmBuffer[i * 2] = (mixL.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
-                    pcmBuffer[i * 2 + 1] = (mixR.coerceIn(-1.0, 1.0) * 32767).toInt().toShort()
-                }
-
-                audioTrack?.write(pcmBuffer, 0, pcmBuffer.size)
-
-                // If no real MP3 MediaPlayer is playing, advance timeline manually
-                if (mediaPlayer == null) {
-                    _playbackPositionMs.value = (currentMs + msPerChunk).coerceAtMost(song.durationMs)
-                }
+                delay(40)
             }
-
-            _isPlaying.value = false
         }
     }
 
-    private fun releaseMediaPlayer() {
+    private fun releasePlayers() {
+        positionSyncJob?.cancel()
+        positionSyncJob = null
         try {
-            equalizer?.release()
-            equalizer = null
-            mediaPlayer?.stop()
-            mediaPlayer?.release()
-            mediaPlayer = null
+            bgmPlayer?.stop()
+            bgmPlayer?.release()
         } catch (_: Exception) {}
+        bgmPlayer = null
+
+        try {
+            userVocalPlayer?.stop()
+            userVocalPlayer?.release()
+        } catch (_: Exception) {}
+        userVocalPlayer = null
+
+        try {
+            guideVocalPlayer?.stop()
+            guideVocalPlayer?.release()
+        } catch (_: Exception) {}
+        guideVocalPlayer = null
     }
 
     fun release() {
         pause()
-        releaseMediaPlayer()
+        releasePlayers()
     }
 }

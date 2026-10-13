@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
@@ -300,6 +301,33 @@ fun KaraokeStudioScreen(
                         )
                     }
                 }
+            }
+        }
+
+        if (activeProfile.dryAudioFilePath != null) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(NeonGreen.copy(alpha = 0.15f))
+                    .clickable { viewModel.navigateTo(AppScreen.VOICE_CLONE) }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = NeonGreen,
+                    modifier = Modifier.size(15.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "主唱声线已绑定：${activeProfile.name} (已用于替代原唱)",
+                    fontSize = 11.sp,
+                    color = NeonGreen,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
 

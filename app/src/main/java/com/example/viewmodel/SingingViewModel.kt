@@ -8,22 +8,19 @@ import androidx.lifecycle.viewModelScope
 import com.example.audio.LiveMicDetector
 import com.example.audio.MicStatus
 import com.example.model.ReverbType
-import com.example.audio.SeparationProcessState
 import com.example.audio.StemAudioEngine
 import com.example.audio.StemSeparator
-import com.example.audio.VoiceCaptureState
 import com.example.audio.VoiceCloneManager
 import com.example.model.PitchNote
-import com.example.model.SampleSongs
 import com.example.model.SingingSessionRecord
 import com.example.model.Song
 import com.example.model.VoiceProfile
+import com.example.util.AppDataStorage
+import com.example.util.AudioFileUtils
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -52,29 +49,35 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
 
     private val vibrator = application.getSystemService(Vibrator::class.java)
 
-    // Engines
-    val audioEngine = StemAudioEngine()
+    // Engines initialized with Application context
+    val audioEngine = StemAudioEngine(application)
     val micDetector = LiveMicDetector()
-    val voiceCloneManager = VoiceCloneManager()
-    val stemSeparator = StemSeparator()
+    val voiceCloneManager = VoiceCloneManager(application)
+    val stemSeparator = StemSeparator(application)
 
     // Screen navigation
     private val _currentScreen = MutableStateFlow(AppScreen.STUDIO)
     val currentScreen: StateFlow<AppScreen> = _currentScreen.asStateFlow()
 
-    // Songs
-    private val _songs = MutableStateFlow<List<Song>>(SampleSongs.songs)
+    // Persistent Songs
+    private val _songs = MutableStateFlow<List<Song>>(AppDataStorage.loadSongs(application))
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
 
-    private val _selectedSong = MutableStateFlow<Song?>(SampleSongs.songs.firstOrNull())
+    private val initialSong: Song? = run {
+        val savedSongId = AppDataStorage.loadActiveSongId(application)
+        val loaded = _songs.value
+        loaded.find { it.id == savedSongId } ?: loaded.firstOrNull()
+    }
+
+    private val _selectedSong = MutableStateFlow<Song?>(initialSong)
     val selectedSong: StateFlow<Song?> = _selectedSong.asStateFlow()
 
-    // Recorded sessions
-    private val _recordedSessions = MutableStateFlow<List<SingingSessionRecord>>(emptyList())
+    // Recorded sessions with persistence
+    private val _recordedSessions = MutableStateFlow<List<SingingSessionRecord>>(AppDataStorage.loadSessions(application))
     val recordedSessions: StateFlow<List<SingingSessionRecord>> = _recordedSessions.asStateFlow()
 
-    // Singing Mode: REALTIME_MIC_TRIGGER vs FULL_VOICE_REPLACEMENT
-    private val _singingMode = MutableStateFlow(com.example.model.SingingMode.REALTIME_MIC_TRIGGER)
+    // Singing Mode: FULL_VOICE_REPLACEMENT vs REALTIME_MIC_TRIGGER
+    private val _singingMode = MutableStateFlow(com.example.model.SingingMode.FULL_VOICE_REPLACEMENT)
     val singingMode: StateFlow<com.example.model.SingingMode> = _singingMode.asStateFlow()
 
     fun setSingingMode(mode: com.example.model.SingingMode) {
@@ -97,10 +100,13 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     // Expose engine flows
     val playbackPositionMs = audioEngine.playbackPositionMs
     val isPlaying = audioEngine.isPlaying
+    val isMp3Ready = audioEngine.isMp3Ready
+    val playbackErrorMessage = audioEngine.errorMessage
     val micStatus = micDetector.status
     val voiceProfiles = voiceCloneManager.profiles
     val activeProfile = voiceCloneManager.activeProfile
     val voiceCaptureState = voiceCloneManager.captureState
+    val isAuditionPlaying = voiceCloneManager.isAuditionPlaying
     val separationState = stemSeparator.processState
 
     // Track evaluated note IDs to avoid double-scoring same note
@@ -110,15 +116,13 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         _selectedSong.value?.let { audioEngine.loadSong(it) }
         audioEngine.setVoiceProfile(activeProfile.value)
 
-        // Observe mic changes and forward to audio synthesis engine in real-time
+        // Observe mic changes and forward to audio engine in real-time
         viewModelScope.launch {
             combine(micStatus, activeProfile, playbackPositionMs) { mic, profile, pos ->
                 Triple(mic, profile, pos)
             }.collect { (mic, profile, pos) ->
                 audioEngine.updateSingingTrigger(mic.isMouthOpen, mic.pitchHz)
                 audioEngine.setVoiceProfile(profile)
-
-                // Evaluate real-time pitch accuracy against current target note
                 evaluateSingingScore(pos, mic)
             }
         }
@@ -130,6 +134,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectSong(song: Song) {
         _selectedSong.value = song
+        AppDataStorage.saveActiveSongId(getApplication(), song.id)
         audioEngine.loadSong(song)
         resetScore()
     }
@@ -181,7 +186,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         audioEngine.reverbType = reverb
     }
 
-    // Voice Clone actions
+    // Voice Profile Actions
     fun selectVoiceProfile(profile: VoiceProfile) {
         voiceCloneManager.selectProfile(profile)
         audioEngine.setVoiceProfile(profile)
@@ -205,44 +210,44 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         )
     }
 
-    fun recordDryVocalSample() {
-        viewModelScope.launch {
-            voiceCloneManager.recordSampleFlow { newProfile ->
-                audioEngine.setVoiceProfile(newProfile)
-            }
+    // Real Dry Vocal Recording
+    fun startRealDryRecording() {
+        voiceCloneManager.startRealRecordingSample { newProfile ->
+            audioEngine.setVoiceProfile(newProfile)
         }
     }
 
-    fun importDryVocalFile(fileName: String) {
-        viewModelScope.launch {
-            voiceCloneManager.importAudioSample(fileName) { newProfile ->
-                audioEngine.setVoiceProfile(newProfile)
-            }
+    fun stopRealDryRecording() {
+        voiceCloneManager.stopRealRecordingSample { newProfile ->
+            audioEngine.setVoiceProfile(newProfile)
         }
     }
 
-    fun importDryVocalFromUri(context: android.content.Context, uri: android.net.Uri) {
-        val fileName = com.example.util.AudioFileUtils.getFileName(context, uri)
-        importDryVocalFile(fileName)
-    }
-
-    // Stem Separation actions
-    fun separateSong(title: String, artist: String = "本地提取", durationMs: Long = 40000L) {
-        viewModelScope.launch {
-            val newSong = stemSeparator.separateSong(title, artist, durationMs)
-            val updated = listOf(newSong) + _songs.value
-            _songs.value = updated
-            selectSong(newSong)
+    // Dry Vocal Audio File Import
+    fun importDryVocalFromUri(uri: android.net.Uri) {
+        voiceCloneManager.importDryVocalFromUri(uri) { newProfile ->
+            audioEngine.setVoiceProfile(newProfile)
         }
     }
 
+    // Dry Vocal Audition
+    fun toggleAudition(filePath: String? = null) {
+        voiceCloneManager.toggleAudition(filePath)
+    }
+
+    fun stopAudition() {
+        voiceCloneManager.stopAudition()
+    }
+
+    // Stem Separation action: imports MP3, executes center cancellation, persists
     fun importAndSeparateLocalAudio(context: android.content.Context, uri: android.net.Uri) {
         viewModelScope.launch {
-            val fileName = com.example.util.AudioFileUtils.getFileName(context, uri)
-            val artist = com.example.util.AudioFileUtils.getAudioArtist(context, uri)
-            val durationMs = com.example.util.AudioFileUtils.getAudioDurationMs(context, uri)
-            // Copy file to local app storage for permanent playback
-            val localFile = com.example.util.AudioFileUtils.copyUriToLocalFile(context, uri)
+            val fileName = AudioFileUtils.getFileName(context, uri)
+            val artist = AudioFileUtils.getAudioArtist(context, uri)
+            val durationMs = AudioFileUtils.getAudioDurationMs(context, uri)
+
+            // Copy file to permanent storage
+            val localFile = AudioFileUtils.copyUriToLocalFile(context, uri, "songs")
             val filePath = localFile?.absolutePath
 
             val newSong = stemSeparator.separateSong(
@@ -252,20 +257,46 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
                 audioFilePath = filePath,
                 audioUriString = uri.toString()
             )
+
             val updated = listOf(newSong) + _songs.value.filter { it.id != newSong.id }
             _songs.value = updated
+            AppDataStorage.saveSongs(getApplication(), updated)
             selectSong(newSong)
+        }
+    }
+
+    fun separateSong(title: String, artist: String = "本地提取", durationMs: Long = 45000L) {
+        viewModelScope.launch {
+            val newSong = stemSeparator.separateSong(
+                songTitle = title,
+                artistName = artist,
+                durationMs = durationMs
+            )
+            val updated = listOf(newSong) + _songs.value.filter { it.id != newSong.id }
+            _songs.value = updated
+            AppDataStorage.saveSongs(getApplication(), updated)
+            selectSong(newSong)
+        }
+    }
+
+    fun deleteSong(song: Song) {
+        val updated = _songs.value.filter { it.id != song.id }
+        _songs.value = updated
+        AppDataStorage.saveSongs(getApplication(), updated)
+        if (_selectedSong.value?.id == song.id) {
+            val next = updated.firstOrNull()
+            _selectedSong.value = next
+            AppDataStorage.saveActiveSongId(getApplication(), next?.id)
+            if (next != null) audioEngine.loadSong(next) else audioEngine.pause()
         }
     }
 
     // Session recording
     fun toggleSessionRecording() {
         if (_isRecordingSession.value) {
-            // Stop and save
             _isRecordingSession.value = false
             saveCurrentSession()
         } else {
-            // Start recording
             _isRecordingSession.value = true
             resetScore()
             if (!isPlaying.value) {
@@ -295,7 +326,9 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
             durationSec = (audioEngine.playbackPositionMs.value / 1000).toInt(),
             voiceProfileName = activeProfile.value.name
         )
-        _recordedSessions.value = listOf(record) + _recordedSessions.value
+        val updated = listOf(record) + _recordedSessions.value
+        _recordedSessions.value = updated
+        AppDataStorage.saveSessions(getApplication(), updated)
     }
 
     private fun resetScore() {
@@ -309,9 +342,8 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         val song = _selectedSong.value ?: return
         val activeNote = song.pitchNotes.find { posMs in it.startMs..it.endMs } ?: return
 
-        // Evaluate around middle of note
         val midNoteTime = (activeNote.startMs + activeNote.endMs) / 2
-        if (abs(posMs - midNoteTime) < 150 && !evaluatedNotes.contains(activeNote.startMs)) {
+        if (abs(posMs - midNoteTime) < 180 && !evaluatedNotes.contains(activeNote.startMs)) {
             evaluatedNotes.add(activeNote.startMs)
 
             val isSinging = mic.isMouthOpen
@@ -326,12 +358,13 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
                     grade = "PERFECT"
                     points = 100
                     isHit = true
-                    triggerHaptic()
+                    vibrateFeedback(40)
                 }
                 isSinging && pitchDelta <= 3.0f -> {
                     grade = "GREAT"
                     points = 70
                     isHit = true
+                    vibrateFeedback(25)
                 }
                 isSinging -> {
                     grade = "GOOD"
@@ -345,28 +378,29 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
 
-            val current = _scoreState.value
-            val newHits = if (isHit) current.hitNotesCount + 1 else current.hitNotesCount
-            val newTotal = current.totalNotesEvaluated + 1
-            val newCombo = if (isHit) current.comboCount + 1 else 0
-            val maxCombo = maxOf(current.maxCombo, newCombo)
-            val accuracy = if (newTotal > 0) (newHits * 100) / newTotal else 100
+            val cur = _scoreState.value
+            val newScore = cur.currentScore + points
+            val newCombo = if (isHit) cur.comboCount + 1 else 0
+            val maxCombo = maxOf(cur.maxCombo, newCombo)
+            val newTotalEvaluated = cur.totalNotesEvaluated + 1
+            val newHitCount = if (isHit) cur.hitNotesCount + 1 else cur.hitNotesCount
+            val accuracy = if (newTotalEvaluated > 0) ((newHitCount.toDouble() / newTotalEvaluated) * 100).toInt() else 100
 
-            _scoreState.value = current.copy(
-                currentScore = current.currentScore + points + (newCombo * 2),
+            _scoreState.value = ScoreState(
+                currentScore = newScore,
                 comboCount = newCombo,
                 maxCombo = maxCombo,
                 lastHitGrade = grade,
                 accuracyPercent = accuracy,
-                totalNotesEvaluated = newTotal,
-                hitNotesCount = newHits
+                totalNotesEvaluated = newTotalEvaluated,
+                hitNotesCount = newHitCount
             )
         }
     }
 
-    private fun triggerHaptic() {
+    private fun vibrateFeedback(durationMs: Long) {
         try {
-            vibrator?.vibrate(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+            vibrator?.vibrate(VibrationEffect.createOneShot(durationMs, VibrationEffect.DEFAULT_AMPLITUDE))
         } catch (_: Exception) {}
     }
 
@@ -374,5 +408,6 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
         super.onCleared()
         audioEngine.release()
         micDetector.stopListening()
+        voiceCloneManager.release()
     }
 }

@@ -125,7 +125,7 @@ fun StemMixerBar(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "AI人声音量",
+                    text = "干声音量",
                     fontSize = 12.sp,
                     color = TextPrimary,
                     modifier = Modifier.width(64.dp)

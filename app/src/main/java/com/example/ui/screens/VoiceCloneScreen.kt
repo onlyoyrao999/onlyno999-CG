@@ -22,12 +22,15 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -50,7 +53,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -70,6 +72,7 @@ import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 import com.example.viewmodel.AppScreen
 import com.example.viewmodel.SingingViewModel
+import java.io.File
 
 @Composable
 fun VoiceCloneScreen(
@@ -79,9 +82,16 @@ fun VoiceCloneScreen(
     val profiles by viewModel.voiceProfiles.collectAsState()
     val activeProfile by viewModel.activeProfile.collectAsState()
     val captureState by viewModel.voiceCaptureState.collectAsState()
+    val isAuditionPlaying by viewModel.isAuditionPlaying.collectAsState()
     val scrollState = rememberScrollState()
 
-    var isAuditioning by remember { mutableStateOf(false) }
+    val dryAudioPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
+    ) { uri: android.net.Uri? ->
+        uri?.let {
+            viewModel.importDryVocalFromUri(it)
+        }
+    }
 
     Column(
         modifier = modifier
@@ -117,7 +127,7 @@ fun VoiceCloneScreen(
                     color = TextPrimary
                 )
                 Text(
-                    text = "录入或上传你的干声样本，用你的声音实时跟唱与替换原曲",
+                    text = "录入或上传你的干声样本，在手机端侧替换原曲主唱",
                     fontSize = 12.sp,
                     color = TextMuted
                 )
@@ -126,7 +136,7 @@ fun VoiceCloneScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // AI Model Architecture & Principle Card
+        // AI Model & Persistence Status Card
         var showModelDetails by remember { mutableStateOf(false) }
         Card(
             modifier = Modifier
@@ -143,19 +153,19 @@ fun VoiceCloneScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(text = "🧠", fontSize = 16.sp)
+                        Text(text = "⚡", fontSize = 16.sp)
                         Spacer(modifier = Modifier.width(8.dp))
                         Column {
                             Text(
-                                text = "声音转换模型架构：RVC / DDSP 神经声码器",
+                                text = "端侧模型全部内置 · 100% 手机芯片离线运算",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = NeonCyan
                             )
                             Text(
-                                text = "原曲音高保持 + 本地声纹共振峰矩阵替换",
+                                text = "💾 记忆存储已开启：退出重启软件后干声与配置全部保留",
                                 fontSize = 11.sp,
-                                color = TextMuted
+                                color = NeonGreen
                             )
                         }
                     }
@@ -171,10 +181,10 @@ fun VoiceCloneScreen(
                 if (showModelDetails) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
-                        text = "本应用采用 RVC (Retrieval-based Voice Conversion) 与端侧 DDSP (可微数字信号处理) 声码器架构：\n\n" +
-                                "1. 歌曲音高提取：通过 F0 跟踪器提取原歌曲人声的连续音高曲线与转音颤音；\n" +
-                                "2. 本地声音建模：从你上传或录制的干声样本中，提取喉位共振峰（F1/F2）、泛音谐波包络与气息质感，构建专属本地声纹向量；\n" +
-                                "3. 实时声线替代：声码器将原歌曲的旋律与歌词内容，用你的本地声线重新合成发音，从而实现【完全替代原唱】或【张嘴实时跟唱】！",
+                        text = "本应用端侧模型与数据持久化机制：\n\n" +
+                                "1. 离线模型引擎：分轨消除算法、DDSP声码器矩阵与F0音高跟踪算法已完整集成打包进安卓APK，发挥手机芯片算力，无需联网上传服务器。\n" +
+                                "2. 自动记忆持久化：导入的MP3音乐、分离出的纯净伴奏轨、录制/上传的干声音频文件已自动加密保存在手机内部存储中，退出软件后永久保留。\n" +
+                                "3. 原唱声线替代：上传的干声音频已绑定为主唱音轨，在舞台播放时将代替原唱发声！",
                         fontSize = 12.sp,
                         color = TextPrimary,
                         lineHeight = 18.sp
@@ -210,13 +220,13 @@ fun VoiceCloneScreen(
                     Spacer(modifier = Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "用户干声样本采集",
+                            text = "用户真实干声样本采集与导入",
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             color = TextPrimary
                         )
                         Text(
-                            text = "只需唱一句或长音'啊~'，提取共鸣峰与声纹",
+                            text = "采集你自己的声音，用于替换歌曲中的原唱声线",
                             fontSize = 11.sp,
                             color = TextMuted
                         )
@@ -266,38 +276,49 @@ fun VoiceCloneScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                val context = androidx.compose.ui.platform.LocalContext.current
-                val dryAudioPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-                    contract = androidx.activity.result.contract.ActivityResultContracts.GetContent()
-                ) { uri: android.net.Uri? ->
-                    uri?.let {
-                        viewModel.importDryVocalFromUri(context, it)
-                    }
-                }
-
                 // Action Buttons
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Record dry sample button
-                    Button(
-                        onClick = { viewModel.recordDryVocalSample() },
-                        enabled = !captureState.isRecordingSample && !captureState.isAnalyzing,
-                        colors = ButtonDefaults.buttonColors(containerColor = NeonPurple),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(46.dp)
-                            .testTag("record_dry_sample_button")
-                    ) {
-                        Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (captureState.isRecordingSample) "录音中 (${captureState.recordedSeconds}s)" else "录制干声样本",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
+                    // Record / Stop dry sample button
+                    if (captureState.isRecordingSample) {
+                        Button(
+                            onClick = { viewModel.stopRealDryRecording() },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonMagenta),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("stop_recording_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "完成录音 (${captureState.recordedSeconds}s)",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    } else {
+                        Button(
+                            onClick = { viewModel.startRealDryRecording() },
+                            enabled = !captureState.isAnalyzing,
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonPurple),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp)
+                                .testTag("record_dry_sample_button")
+                        ) {
+                            Icon(imageVector = Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "录制真实干声",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
                     }
 
                     // Import dry file button
@@ -318,11 +339,88 @@ fun VoiceCloneScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Audition Card for Current Active Dry Vocal
+        val dryAudioPath = activeProfile.dryAudioFilePath
+        if (dryAudioPath != null && File(dryAudioPath).exists()) {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.5.dp, NeonGreen, RoundedCornerShape(18.dp)),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = StudioSurfaceVariant)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.AudioFile,
+                                contentDescription = null,
+                                tint = NeonGreen,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    text = "🎧 当前绑定的真实干声音频",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = NeonGreen
+                                )
+                                Text(
+                                    text = File(dryAudioPath).name,
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+
+                        // Audition Play Button
+                        Button(
+                            onClick = { viewModel.toggleAudition(dryAudioPath) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isAuditionPlaying) NeonMagenta else NeonGreen
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.height(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isAuditionPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = null,
+                                tint = Color.Black,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (isAuditionPlaying) "暂停试听" else "试听干声",
+                                color = Color.Black,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "✅ 该干声音频已生效！进入舞台点击播放时，将使用此干声与伴奏结合唱响旋律。",
+                        fontSize = 11.sp,
+                        color = TextPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         // Voice Profiles Grid
         Text(
-            text = "音色选择 (当前用于实时跟唱)",
+            text = "音色库选择 (当前用于舞台跟唱)",
             fontSize = 15.sp,
             fontWeight = FontWeight.Bold,
             color = TextPrimary
@@ -374,7 +472,7 @@ fun VoiceCloneScreen(
                                 fontSize = 14.sp,
                                 color = if (isSelected) NeonCyan else TextPrimary
                             )
-                            if (profile.isUserCustom) {
+                            if (profile.dryAudioFilePath != null) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Box(
                                     modifier = Modifier
@@ -382,7 +480,7 @@ fun VoiceCloneScreen(
                                         .background(NeonGreen.copy(alpha = 0.2f))
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text(text = "我的原声", fontSize = 9.sp, color = NeonGreen)
+                                    Text(text = "已绑干声", fontSize = 9.sp, color = NeonGreen)
                                 }
                             }
                         }
@@ -435,7 +533,7 @@ fun VoiceCloneScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                // Formant Shift (喉位/音色年龄)
+                // Formant Shift
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -452,7 +550,7 @@ fun VoiceCloneScreen(
                     )
                 }
 
-                // Breathiness (气息质感)
+                // Breathiness
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -469,7 +567,7 @@ fun VoiceCloneScreen(
                     )
                 }
 
-                // Auto-tune strength (自动修音吸附)
+                // Auto-tune strength
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -486,13 +584,13 @@ fun VoiceCloneScreen(
                     )
                 }
 
-                // Warmth (厚度与共鸣)
+                // Warmth
                 Column {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(text = "声音厚度与胸腔共鸣 (Warmth)", fontSize = 12.sp, color = TextPrimary)
+                        Text(text = "胸腔共鸣厚度 (Warmth)", fontSize = 12.sp, color = TextPrimary)
                         Text(text = "${(activeProfile.warmth * 100).toInt()}%", fontSize = 12.sp, color = NeonYellow)
                     }
                     Slider(

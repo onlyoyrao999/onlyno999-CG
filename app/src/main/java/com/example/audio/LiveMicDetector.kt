@@ -183,29 +183,15 @@ class LiveMicDetector {
 
     private fun startSimulation() {
         stopListening()
-        _status.value = _status.value.copy(isRecording = true)
-        simulationJob = scope.launch {
-            var time = 0.0
-            while (isActive) {
-                time += 0.05
-                // Organic breathing / vocal variation simulation
-                val amp = (0.5 + 0.4 * kotlin.math.sin(time * 1.5) + 0.1 * kotlin.math.cos(time * 4.0)).toFloat().coerceIn(0f, 1f)
-                val isTriggered = amp > sensitivityThreshold
-                val pitch = if (isTriggered) (220.0 + 40.0 * kotlin.math.sin(time * 0.8)).toFloat() else 0f
-                val midi = if (pitch > 50f) (69.0 + 12.0 * (kotlin.math.ln(pitch / 440.0) / kotlin.math.ln(2.0))).toFloat() else 0f
-
-                _status.value = MicStatus(
-                    isRecording = true,
-                    amplitude = amp,
-                    decibels = -25f + amp * 20f,
-                    pitchHz = pitch,
-                    detectedMidi = midi,
-                    isMouthOpen = isTriggered,
-                    pitchConfidence = 0.85f
-                )
-                delay(50)
-            }
-        }
+        _status.value = MicStatus(
+            isRecording = true,
+            amplitude = 0f,
+            decibels = -60f,
+            pitchHz = 0f,
+            detectedMidi = 0f,
+            isMouthOpen = false,
+            pitchConfidence = 0f
+        )
     }
 
     fun stopListening() {

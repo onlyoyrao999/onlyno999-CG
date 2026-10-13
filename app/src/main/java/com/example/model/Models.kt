@@ -42,7 +42,9 @@ data class Song(
     val isCustomImported: Boolean = true,
     val separationStatus: SeparationStatus = SeparationStatus.READY,
     val audioFilePath: String? = null,
-    val audioUriString: String? = null
+    val audioUriString: String? = null,
+    val bgmFilePath: String? = null,        // 纯净伴奏文件路径 (已去除原唱)
+    val vocalFilePath: String? = null       // 提取的原唱人声文件路径
 )
 
 enum class SeparationStatus {
@@ -56,6 +58,7 @@ data class VoiceProfile(
     val name: String,
     val subtitle: String,
     val isUserCustom: Boolean = false,
+    val dryAudioFilePath: String? = null,   // 用户真实录制或上传的干声音频文件路径
     val basePitchHz: Float = 220f,
     val formantShift: Float = 1.0f,     // 0.7 (deeper) to 1.4 (brighter/sweeter)
     val breathiness: Float = 0.2f,      // 0.0 to 1.0
