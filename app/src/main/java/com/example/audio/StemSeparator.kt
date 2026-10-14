@@ -94,13 +94,29 @@ class StemSeparator(private val context: Context) {
         // Generate melody pitch contour and lyric timestamps for real-time sing-along scoring
         val generatedNotes = mutableListOf<PitchNote>()
         val generatedLyrics = mutableListOf<LyricLine>()
-        val lineCount = (realDuration / 6000L).toInt().coerceAtLeast(3)
 
         val noteScales = listOf(60, 62, 64, 65, 67, 69, 71, 72) // C4 to C5
         val scaleNames = listOf("C4", "D4", "E4", "F4", "G4", "A4", "B4", "C5")
 
+        val introDurationMs = 14000L.coerceAtMost(realDuration / 4)
+        if (introDurationMs > 3000L) {
+            generatedLyrics.add(
+                LyricLine(
+                    startMs = 0L,
+                    endMs = introDurationMs,
+                    text = "【前奏伴奏】纯音乐播放中，准备开唱...",
+                    words = listOf(
+                        LyricWord(startMs = 0L, endMs = introDurationMs, text = "【前奏纯音乐】", midiNote = 60)
+                    )
+                )
+            )
+        }
+
+        val singingDuration = (realDuration - introDurationMs).coerceAtLeast(6000L)
+        val lineCount = (singingDuration / 6000L).toInt().coerceAtLeast(2)
+
         for (i in 0 until lineCount) {
-            val start = i * 6000L
+            val start = introDurationMs + i * 6000L
             val end = (start + 5200L).coerceAtMost(realDuration)
             val subDuration = (end - start) / 4
 
