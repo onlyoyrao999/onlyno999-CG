@@ -441,7 +441,7 @@ fun KaraokeStudioScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     val isBoth = stemSoloMode == "BOTH"
                     Box(
@@ -457,7 +457,7 @@ fun KaraokeStudioScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "伴奏+AI人声",
+                            text = "伴奏+AI",
                             fontSize = 10.sp,
                             fontWeight = if (isBoth) FontWeight.Bold else FontWeight.Normal,
                             color = if (isBoth) NeonCyan else TextMuted
@@ -467,9 +467,9 @@ fun KaraokeStudioScreen(
                     val isVocal = stemSoloMode == "VOCAL"
                     Box(
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(1.1f)
                             .clip(RoundedCornerShape(6.dp))
-                            .background(if (isVocal) NeonPurple.copy(alpha = 0.25f) else StudioSurface)
+                            .background(if (isVocal) NeonPurple.copy(alpha = 0.35f) else StudioSurface)
                             .clickable {
                                 stemSoloMode = "VOCAL"
                                 viewModel.audioEngine.stemSoloMode = "VOCAL"
@@ -488,7 +488,7 @@ fun KaraokeStudioScreen(
                     val isBgm = stemSoloMode == "BGM"
                     Box(
                         modifier = Modifier
-                            .weight(1f)
+                            .weight(0.9f)
                             .clip(RoundedCornerShape(6.dp))
                             .background(if (isBgm) NeonGreen.copy(alpha = 0.25f) else StudioSurface)
                             .clickable {
@@ -499,13 +499,52 @@ fun KaraokeStudioScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "单听伴奏",
+                            text = "纯伴奏",
                             fontSize = 10.sp,
                             fontWeight = if (isBgm) FontWeight.Bold else FontWeight.Normal,
                             color = if (isBgm) NeonGreen else TextMuted
                         )
                     }
+
+                    val isOriginal = stemSoloMode == "ORIGINAL"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isOriginal) NeonYellow.copy(alpha = 0.25f) else StudioSurface)
+                            .clickable {
+                                stemSoloMode = "ORIGINAL"
+                                viewModel.audioEngine.stemSoloMode = "ORIGINAL"
+                            }
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "原唱对比",
+                            fontSize = 10.sp,
+                            fontWeight = if (isOriginal) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isOriginal) NeonYellow else TextMuted
+                        )
+                    }
                 }
+
+                // Status hint for current stem solo listening mode
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = when (stemSoloMode) {
+                        "VOCAL" -> "🎧 当前状态：伴奏已静音，只播放【${activeProfile.name}】的AI声线演唱"
+                        "ORIGINAL" -> "🎵 当前状态：伴奏已静音，只播放原唱歌手纯人声（用于音色对比）"
+                        "BGM" -> "🎹 当前状态：原唱和AI人声已消除，只播放纯净伴奏"
+                        else -> "✨ 当前状态：纯净伴奏 + 【${activeProfile.name}】AI人声"
+                    },
+                    fontSize = 9.sp,
+                    color = when (stemSoloMode) {
+                        "VOCAL" -> NeonPurple
+                        "ORIGINAL" -> NeonYellow
+                        "BGM" -> NeonGreen
+                        else -> TextMuted
+                    }
+                )
             }
         }
 

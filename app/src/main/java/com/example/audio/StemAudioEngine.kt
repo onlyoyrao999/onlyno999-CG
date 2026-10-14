@@ -303,11 +303,13 @@ class StemAudioEngine(
     private fun applyVolumes() {
         val effectiveBgmVol = when (stemSoloMode) {
             "VOCAL" -> 0f
+            "ORIGINAL" -> 0f
             else -> bgmVolume
         }
 
         val effectiveAiVoiceVol = when (stemSoloMode) {
             "BGM" -> 0f
+            "ORIGINAL" -> 0f
             else -> if (singingMode == SingingMode.REALTIME_MIC_TRIGGER && !isMouthOpenSinging) {
                 0.12f * aiVoiceVolume
             } else {
@@ -316,7 +318,9 @@ class StemAudioEngine(
         }
 
         val effectiveGuideVol = when (stemSoloMode) {
+            "ORIGINAL" -> 1.0f
             "BGM" -> 0f
+            "VOCAL" -> 0f
             else -> guideVocalVolume
         }
 
@@ -345,9 +349,9 @@ class StemAudioEngine(
                 uvp.start()
             }
 
-            // Start guide vocal if active
+            // Start guide vocal if active or in ORIGINAL mode
             val gvp = guideVocalPlayer
-            if (gvp != null && guideVocalVolume > 0.05f) {
+            if (gvp != null && (guideVocalVolume > 0.05f || stemSoloMode == "ORIGINAL")) {
                 gvp.seekTo(bp?.currentPosition ?: 0)
                 gvp.start()
             }
