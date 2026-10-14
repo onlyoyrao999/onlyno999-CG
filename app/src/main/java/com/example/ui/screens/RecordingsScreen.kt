@@ -225,5 +225,17 @@ fun RecordingsScreen(
                 }
             }
         }
+        
+        Spacer(modifier = Modifier.height(12.dp))
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "SingSync AI 实时跟唱 · 版本 v${com.example.BuildConfig.VERSION_NAME} (构建 #${com.example.BuildConfig.VERSION_CODE})",
+                fontSize = 11.sp,
+                color = TextMuted
+            )
+        }
     }
 }

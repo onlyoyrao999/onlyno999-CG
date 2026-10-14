@@ -54,6 +54,8 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     val micDetector = LiveMicDetector()
     val voiceCloneManager = VoiceCloneManager(application)
     val stemSeparator = StemSeparator(application)
+    val voiceConversionEngine = audioEngine.conversionEngine
+    val conversionState = voiceConversionEngine.conversionState
 
     // Screen navigation
     private val _currentScreen = MutableStateFlow(AppScreen.STUDIO)
@@ -202,6 +204,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     fun selectVoiceProfile(profile: VoiceProfile) {
         voiceCloneManager.selectProfile(profile)
         audioEngine.setVoiceProfile(profile)
+        synthesizeAiCover(forceRebuild = false)
     }
 
     fun updateProfileParams(
@@ -220,18 +223,21 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
             autoTuneStrength = autoTune,
             vibratoDepth = vibrato
         )
+        synthesizeAiCover(forceRebuild = true)
     }
 
     // Real Dry Vocal Recording
     fun startRealDryRecording() {
         voiceCloneManager.startRealRecordingSample { newProfile ->
             audioEngine.setVoiceProfile(newProfile)
+            synthesizeAiCover(forceRebuild = true)
         }
     }
 
     fun stopRealDryRecording() {
         voiceCloneManager.stopRealRecordingSample { newProfile ->
             audioEngine.setVoiceProfile(newProfile)
+            synthesizeAiCover(forceRebuild = true)
         }
     }
 
@@ -239,6 +245,7 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
     fun importDryVocalFromUri(uri: android.net.Uri) {
         voiceCloneManager.importDryVocalFromUri(uri) { newProfile ->
             audioEngine.setVoiceProfile(newProfile)
+            synthesizeAiCover(forceRebuild = true)
         }
     }
 
@@ -249,6 +256,17 @@ class SingingViewModel(application: Application) : AndroidViewModel(application)
 
     fun stopAudition() {
         voiceCloneManager.stopAudition()
+    }
+
+    // AI Singing Voice Conversion: transforms song vocal into the user's uploaded voice timbre
+    fun synthesizeAiCover(forceRebuild: Boolean = true) {
+        val song = _selectedSong.value ?: return
+        val profile = voiceCloneManager.activeProfile.value
+        audioEngine.setVoiceProfile(profile)
+        viewModelScope.launch {
+            voiceConversionEngine.convertSongVoice(song, profile, forceRebuild)
+            audioEngine.reloadAiCoverPlayer()
+        }
     }
 
     // Stem Separation action: imports MP3, executes center cancellation, persists

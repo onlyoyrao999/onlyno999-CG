@@ -20,17 +20,20 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileInputStream
 
-class StemAudioEngine(private val context: Context) {
+class StemAudioEngine(
+    private val context: Context,
+    val conversionEngine: VoiceConversionEngine = VoiceConversionEngine(context)
+) {
 
     private val scope = CoroutineScope(Dispatchers.Main)
 
     // Primary BGM Accompaniment Player
     private var bgmPlayer: MediaPlayer? = null
 
-    // User Dry Vocal Player (Plays uploaded dry MP3 or recorded dry vocal)
+    // User Voice AI Converted Track Player (sings the song melody and lyrics in user's timbre)
     private var userVocalPlayer: MediaPlayer? = null
 
-    // Vocal Guide / Extracted Vocal Player (if listening to original vocal stem)
+    // Vocal Guide Player (if listening to original vocal stem)
     private var guideVocalPlayer: MediaPlayer? = null
 
     private var positionSyncJob: Job? = null
@@ -106,7 +109,7 @@ class StemAudioEngine(private val context: Context) {
                     }
                 } else {
                     // Duck volume smoothly when mouth is not open
-                    uvp.setVolume(0.15f * aiVoiceVolume, 0.15f * aiVoiceVolume)
+                    uvp.setVolume(0.12f * aiVoiceVolume, 0.12f * aiVoiceVolume)
                 }
             } else {
                 // In Full Voice Replacement mode, always full volume
@@ -119,7 +122,7 @@ class StemAudioEngine(private val context: Context) {
     }
 
     /**
-     * Updates active voice profile. Only re-initializes userVocalPlayer if the file path or ID actually changed!
+     * Updates active voice profile and triggers AI voice conversion for the current song.
      */
     fun setVoiceProfile(profile: VoiceProfile) {
         val pathChanged = this.activeProfile.dryAudioFilePath != profile.dryAudioFilePath
@@ -132,9 +135,8 @@ class StemAudioEngine(private val context: Context) {
     }
 
     /**
-     * Loads the song. Automatically selects the cleanest audio:
-     * Prefers clean separated BGM file (with lead vocals eliminated via phase cancellation),
-     * or falls back to original audioFilePath.
+     * Loads the song. Automatically selects the clean accompaniment BGM file
+     * and sets up the AI converted vocal track.
      */
     fun loadSong(song: Song) {
         pause()
@@ -178,7 +180,7 @@ class StemAudioEngine(private val context: Context) {
             }
         }
 
-        // 2. Guide vocal stem player (if isolated original vocal exists)
+        // 2. Guide vocal stem player (original isolated vocal)
         val targetVocalPath = song.vocalFilePath
         if (targetVocalPath != null && File(targetVocalPath).exists()) {
             try {
@@ -198,22 +200,29 @@ class StemAudioEngine(private val context: Context) {
             } catch (_: Exception) {}
         }
 
-        // 3. Setup User dry vocal player
+        // 3. Setup User AI Converted Vocal Player
         setupUserVocalPlayer()
         applyVolumes()
     }
 
     /**
-     * Prepares user's uploaded or recorded dry vocal track to sing alongside BGM.
+     * Sets up the AI converted vocal player so that the user's voice sings this song.
+     * If the converted track exists, loads it immediately.
+     * If not, initiates background conversion and hot-swaps upon completion.
      */
-    private fun setupUserVocalPlayer() {
-        val dryPath = activeProfile.dryAudioFilePath
-        if (dryPath != null && File(dryPath).exists()) {
+    fun setupUserVocalPlayer() {
+        val song = currentSong ?: return
+        val profile = activeProfile
+
+        val coverPath = conversionEngine.getCoverFilePath(song.id, profile.id)
+        val coverFile = File(coverPath)
+
+        if (coverFile.exists() && coverFile.length() > 44) {
+            // High fidelity converted cover track is ready!
             try {
                 userVocalPlayer?.stop()
                 userVocalPlayer?.release()
-                val file = File(dryPath)
-                val fis = FileInputStream(file)
+                val fis = FileInputStream(coverFile)
                 userVocalPlayer = MediaPlayer().apply {
                     setAudioAttributes(
                         AudioAttributes.Builder()
@@ -223,7 +232,6 @@ class StemAudioEngine(private val context: Context) {
                     )
                     setDataSource(fis.fd)
                     fis.close()
-                    isLooping = true // Loop dry vocal sample to continuously accompany the melody
                     prepare()
                     if (_isPlaying.value) {
                         ensureUserVocalPlaying()
@@ -235,9 +243,49 @@ class StemAudioEngine(private val context: Context) {
                 userVocalPlayer = null
             }
         } else {
-            userVocalPlayer?.stop()
-            userVocalPlayer?.release()
-            userVocalPlayer = null
+            // Converted track not found yet: launch on-device synthesis
+            scope.launch {
+                val generatedPath = conversionEngine.convertSongVoice(song, profile, forceRebuild = false)
+                if (generatedPath.isNotBlank() && currentSong?.id == song.id && activeProfile.id == profile.id) {
+                    reloadAiCoverPlayer()
+                }
+            }
+        }
+    }
+
+    fun reloadAiCoverPlayer() {
+        val song = currentSong ?: return
+        val profile = activeProfile
+        val coverPath = conversionEngine.getCoverFilePath(song.id, profile.id)
+        val coverFile = File(coverPath)
+
+        if (coverFile.exists() && coverFile.length() > 44) {
+            try {
+                val isCurrentlyPlaying = _isPlaying.value
+                val currentPos = bgmPlayer?.currentPosition ?: 0
+
+                userVocalPlayer?.stop()
+                userVocalPlayer?.release()
+                val fis = FileInputStream(coverFile)
+                userVocalPlayer = MediaPlayer().apply {
+                    setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build()
+                    )
+                    setDataSource(fis.fd)
+                    fis.close()
+                    prepare()
+                    seekTo(currentPos)
+                    if (isCurrentlyPlaying) {
+                        start()
+                    }
+                }
+                applyVolumes()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -246,8 +294,7 @@ class StemAudioEngine(private val context: Context) {
         val bp = bgmPlayer
         try {
             val currentPos = bp?.currentPosition ?: 0
-            val dryDuration = uvp.duration.coerceAtLeast(1)
-            uvp.seekTo(currentPos % dryDuration)
+            uvp.seekTo(currentPos)
             uvp.start()
             applyVolumes()
         } catch (_: Exception) {}
@@ -262,7 +309,7 @@ class StemAudioEngine(private val context: Context) {
         val effectiveAiVoiceVol = when (stemSoloMode) {
             "BGM" -> 0f
             else -> if (singingMode == SingingMode.REALTIME_MIC_TRIGGER && !isMouthOpenSinging) {
-                0.15f * aiVoiceVolume
+                0.12f * aiVoiceVolume
             } else {
                 aiVoiceVolume
             }
@@ -290,12 +337,11 @@ class StemAudioEngine(private val context: Context) {
                 startPositionSync()
             }
 
-            // Sync and start user dry vocal player
+            // Sync and start user AI converted vocal player
             val uvp = userVocalPlayer
             if (uvp != null) {
                 val currentPos = bp?.currentPosition ?: 0
-                val dryDuration = uvp.duration.coerceAtLeast(1)
-                uvp.seekTo(currentPos % dryDuration)
+                uvp.seekTo(currentPos)
                 uvp.start()
             }
 
@@ -338,11 +384,13 @@ class StemAudioEngine(private val context: Context) {
         _playbackPositionMs.value = clamped
         try {
             bgmPlayer?.seekTo(clamped.toInt())
-            val uvp = userVocalPlayer
-            if (uvp != null) {
-                val dur = uvp.duration.coerceAtLeast(1)
-                uvp.seekTo((clamped % dur).toInt())
-            }
+        } catch (_: Exception) {}
+
+        try {
+            userVocalPlayer?.seekTo(clamped.toInt())
+        } catch (_: Exception) {}
+
+        try {
             guideVocalPlayer?.seekTo(clamped.toInt())
         } catch (_: Exception) {}
     }
@@ -351,11 +399,20 @@ class StemAudioEngine(private val context: Context) {
         positionSyncJob?.cancel()
         positionSyncJob = scope.launch {
             while (isActive && _isPlaying.value) {
+                val pos = bgmPlayer?.currentPosition?.toLong() ?: 0L
+                _playbackPositionMs.value = pos
+
+                // Guard drift between BGM and AI Vocal
+                val uvp = userVocalPlayer
                 val bp = bgmPlayer
-                if (bp != null && bp.isPlaying) {
-                    _playbackPositionMs.value = bp.currentPosition.toLong()
+                if (uvp != null && bp != null && uvp.isPlaying && bp.isPlaying) {
+                    val drift = Math.abs(uvp.currentPosition - bp.currentPosition)
+                    if (drift > 200) {
+                        uvp.seekTo(bp.currentPosition)
+                    }
                 }
-                delay(40)
+
+                delay(50)
             }
         }
     }
@@ -363,6 +420,7 @@ class StemAudioEngine(private val context: Context) {
     private fun releasePlayers() {
         positionSyncJob?.cancel()
         positionSyncJob = null
+
         try {
             bgmPlayer?.stop()
             bgmPlayer?.release()
@@ -383,7 +441,6 @@ class StemAudioEngine(private val context: Context) {
     }
 
     fun release() {
-        pause()
         releasePlayers()
     }
 }

@@ -167,6 +167,11 @@ fun VoiceCloneScreen(
                                 fontSize = 11.sp,
                                 color = NeonGreen
                             )
+                            Text(
+                                text = "📦 封装版本: v${com.example.BuildConfig.VERSION_NAME} (构建迭代 #${com.example.BuildConfig.VERSION_CODE})",
+                                fontSize = 10.sp,
+                                color = NeonYellow
+                            )
                         }
                     }
 
@@ -443,61 +448,83 @@ fun VoiceCloneScreen(
                     .clickable { viewModel.selectVoiceProfile(profile) },
                 colors = CardDefaults.cardColors(containerColor = if (isSelected) StudioSurfaceVariant else StudioSurface)
             ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(CircleShape)
-                            .background(if (profile.isUserCustom) NeonPurple else Color(0xFF24304E))
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = if (profile.isUserCustom) Icons.Default.RecordVoiceOver else Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = null,
-                            tint = if (isSelected) NeonCyan else Color.White,
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = profile.name,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = if (isSelected) NeonCyan else TextPrimary
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(if (profile.isUserCustom) NeonPurple else Color(0xFF24304E))
+                        ) {
+                            Icon(
+                                imageVector = if (profile.isUserCustom) Icons.Default.RecordVoiceOver else Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = null,
+                                tint = if (isSelected) NeonCyan else Color.White,
+                                modifier = Modifier.size(20.dp)
                             )
-                            if (profile.dryAudioFilePath != null) {
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(NeonGreen.copy(alpha = 0.2f))
-                                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                                ) {
-                                    Text(text = "已绑干声", fontSize = 9.sp, color = NeonGreen)
+                        }
+
+                        Spacer(modifier = Modifier.width(12.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = profile.name,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = if (isSelected) NeonCyan else TextPrimary
+                                )
+                                if (profile.dryAudioFilePath != null) {
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(NeonGreen.copy(alpha = 0.2f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(text = "已绑干声", fontSize = 9.sp, color = NeonGreen)
+                                    }
                                 }
                             }
+                            Text(
+                                text = profile.subtitle,
+                                fontSize = 11.sp,
+                                color = TextMuted
+                            )
                         }
-                        Text(
-                            text = profile.subtitle,
-                            fontSize = 11.sp,
-                            color = TextMuted
-                        )
+
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = "已选择",
+                                tint = NeonCyan,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
 
                     if (isSelected) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = "已选择",
-                            tint = NeonCyan,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Button(
+                            onClick = {
+                                viewModel.synthesizeAiCover(forceRebuild = false)
+                                viewModel.navigateTo(AppScreen.STUDIO)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "🎤 立即用此音色翻唱当前歌曲 (返回舞台)",
+                                color = Color.Black,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp
+                            )
+                        }
                     }
                 }
             }

@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
@@ -40,6 +41,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -96,9 +98,13 @@ fun KaraokeStudioScreen(
     val activeProfile by viewModel.activeProfile.collectAsState()
     val scoreState by viewModel.scoreState.collectAsState()
     val isRecordingSession by viewModel.isRecordingSession.collectAsState()
+    val profiles by viewModel.voiceCloneManager.profiles.collectAsState()
+    val conversionState by viewModel.conversionState.collectAsState()
 
     var showSongPicker by remember { mutableStateOf(false) }
+    var showVoicePicker by remember { mutableStateOf(false) }
     var showMixerPanel by remember { mutableStateOf(false) }
+    var stemSoloMode by remember { mutableStateOf(viewModel.audioEngine.stemSoloMode) }
 
     val context = androidx.compose.ui.platform.LocalContext.current
     val studioAudioPickerLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -242,7 +248,7 @@ fun KaraokeStudioScreen(
                     )
                 }
                 Text(
-                    text = "${activeSong.artist} · ${activeSong.genre}",
+                    text = "${activeSong.artist} · ${activeSong.genre} · v${com.example.BuildConfig.VERSION_NAME}",
                     fontSize = 11.sp,
                     color = TextMuted
                 )
@@ -304,54 +310,201 @@ fun KaraokeStudioScreen(
             }
         }
 
-        if (activeProfile.dryAudioFilePath != null) {
-            val isAuditionPlaying by viewModel.isAuditionPlaying.collectAsState()
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(NeonGreen.copy(alpha = 0.15f))
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        // AI Voice Conversion & Profile Control Card
+        Spacer(modifier = Modifier.height(6.dp))
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = StudioSurfaceVariant.copy(alpha = 0.85f))
+        ) {
+            Column(modifier = Modifier.padding(10.dp)) {
                 Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable { viewModel.navigateTo(AppScreen.VOICE_CLONE) },
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        tint = NeonGreen,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "主唱声线：${activeProfile.name} (已替代原唱)",
-                        fontSize = 11.sp,
-                        color = NeonGreen,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { showVoicePicker = true },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = NeonGreen,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "主唱声线: ${activeProfile.name}",
+                                    fontSize = 12.sp,
+                                    color = NeonGreen,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "▼ 换音色",
+                                    fontSize = 10.sp,
+                                    color = NeonCyan,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Text(
+                                text = if (activeProfile.dryAudioFilePath != null) {
+                                    "✨ 已绑定本人真实干声：已用你的音色迁移翻唱全曲旋律与歌词"
+                                } else {
+                                    "正在用当前音色模型演唱全曲旋律与歌词"
+                                },
+                                fontSize = 10.sp,
+                                color = if (activeProfile.dryAudioFilePath != null) NeonCyan else TextMuted
+                            )
+                        }
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Re-synthesize AI Cover button
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(NeonPurple.copy(alpha = 0.3f))
+                                .clickable { viewModel.synthesizeAiCover(forceRebuild = true) }
+                                .padding(horizontal = 7.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "⚡ 重新合成",
+                                color = NeonPurple,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        if (activeProfile.dryAudioFilePath != null) {
+                            val isAuditionPlaying by viewModel.isAuditionPlaying.collectAsState()
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isAuditionPlaying) NeonMagenta else NeonGreen.copy(alpha = 0.25f))
+                                    .clickable { viewModel.toggleAudition(activeProfile.dryAudioFilePath) }
+                                    .padding(horizontal = 7.dp, vertical = 4.dp)
+                            ) {
+                                Text(
+                                    text = if (isAuditionPlaying) "⏸ 暂停" else "▶ 试听干声",
+                                    color = if (isAuditionPlaying) Color.Black else NeonGreen,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(if (isAuditionPlaying) NeonMagenta else NeonGreen)
-                        .clickable { viewModel.toggleAudition(activeProfile.dryAudioFilePath) }
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                // If currently synthesizing voice conversion, show live progress bar
+                if (conversionState.isConverting) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = conversionState.statusMessage,
+                                fontSize = 10.sp,
+                                color = NeonYellow
+                            )
+                            Text(
+                                text = "${(conversionState.progress * 100).toInt()}%",
+                                fontSize = 10.sp,
+                                color = NeonYellow,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LinearProgressIndicator(
+                            progress = { conversionState.progress },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp)),
+                            color = NeonYellow,
+                            trackColor = StudioSurface
+                        )
+                    }
+                }
+
+                // Stem Solo Listening Selectors: Listen to BGM only, AI Vocal only, or Full Song
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = if (isAuditionPlaying) "⏸ 暂停" else "▶ 单独试听",
-                        color = Color.Black,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    val isBoth = stemSoloMode == "BOTH"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isBoth) NeonCyan.copy(alpha = 0.25f) else StudioSurface)
+                            .clickable {
+                                stemSoloMode = "BOTH"
+                                viewModel.audioEngine.stemSoloMode = "BOTH"
+                            }
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "伴奏+AI人声",
+                            fontSize = 10.sp,
+                            fontWeight = if (isBoth) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isBoth) NeonCyan else TextMuted
+                        )
+                    }
+
+                    val isVocal = stemSoloMode == "VOCAL"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isVocal) NeonPurple.copy(alpha = 0.25f) else StudioSurface)
+                            .clickable {
+                                stemSoloMode = "VOCAL"
+                                viewModel.audioEngine.stemSoloMode = "VOCAL"
+                            }
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "单听AI人声",
+                            fontSize = 10.sp,
+                            fontWeight = if (isVocal) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isVocal) NeonPurple else TextMuted
+                        )
+                    }
+
+                    val isBgm = stemSoloMode == "BGM"
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(if (isBgm) NeonGreen.copy(alpha = 0.25f) else StudioSurface)
+                            .clickable {
+                                stemSoloMode = "BGM"
+                                viewModel.audioEngine.stemSoloMode = "BGM"
+                            }
+                            .padding(vertical = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "单听伴奏",
+                            fontSize = 10.sp,
+                            fontWeight = if (isBgm) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isBgm) NeonGreen else TextMuted
+                        )
+                    }
                 }
             }
         }
@@ -756,6 +909,132 @@ fun KaraokeStudioScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showSongPicker = false }) {
+                    Text("关闭", color = NeonCyan)
+                }
+            },
+            containerColor = StudioSurface
+        )
+    }
+
+    // Voice Profile Picker Dialog
+    if (showVoicePicker) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showVoicePicker = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.RecordVoiceOver,
+                        contentDescription = null,
+                        tint = NeonCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "选择AI主唱声线 (替换原唱)",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            text = {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                    item {
+                        androidx.compose.material3.Button(
+                            onClick = {
+                                showVoicePicker = false
+                                viewModel.navigateTo(AppScreen.VOICE_CLONE)
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = NeonPurple),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "采集录制 / 上传新干声样本",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                        }
+                    }
+
+                    items(profiles) { profile ->
+                        val isSel = profile.id == activeProfile.id
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSel) StudioSurfaceVariant else Color.Transparent)
+                                .clickable {
+                                    viewModel.selectVoiceProfile(profile)
+                                    showVoicePicker = false
+                                    viewModel.synthesizeAiCover(forceRebuild = false)
+                                }
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(if (profile.isUserCustom) NeonPurple else Color(0xFF24304E))
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.RecordVoiceOver,
+                                    contentDescription = null,
+                                    tint = if (isSel) NeonCyan else Color.White,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = profile.name,
+                                        color = if (isSel) NeonCyan else TextPrimary,
+                                        fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                        fontSize = 13.sp
+                                    )
+                                    if (profile.dryAudioFilePath != null) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(NeonGreen.copy(alpha = 0.2f))
+                                                .padding(horizontal = 5.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(text = "已绑干声", fontSize = 9.sp, color = NeonGreen)
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = profile.subtitle,
+                                    fontSize = 11.sp,
+                                    color = TextMuted
+                                )
+                            }
+                            if (isSel) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = "当前使用",
+                                    tint = NeonCyan,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showVoicePicker = false }) {
                     Text("关闭", color = NeonCyan)
                 }
             },
